@@ -81,29 +81,41 @@ async fn main() -> Result<(), Error> {
                 .arg(
                     Arg::new("currency")
                         .about("The participant account currency")
-                        .index(2)
-                        .required(true)
+                        .long("currency")
+                        .short('c')
+                        .takes_value(true)
                 )
                 .arg(
                     Arg::new("ndc")
                         .about("The participant account NDC")
-                        .index(3)
-                        .required(true)
+                        .long("ndc")
+                        .short('n')
+                        .takes_value(true)
+                        .requires("currency")
                 )
                 .arg(
                     Arg::new("position")
                         .about("The participant account position")
-                        .index(4)
-                        .required(true)
+                        .long("position")
+                        .short('p')
+                        .takes_value(true)
+                        .requires("currency")
                 )
             )
         )
         .get_matches();
 
-    if let Some(ref participants_args) = args.subcommand_matches("participants") {
-        println!("participants {:?}", participants_args);
+    match args.subcommand() {
+        Some(("participant", participant_args)) => {
+            match participant_args.subcommand() {
+                Some(("upsert", upsert_args)) => {
+                    println!("upsert args {:?}", upsert_args);
+                },
+                _ => println!("participant args {:?}", participant_args)
+            }
+        },
+        _ => ()
     }
 
-    println!("{:?}", args);
     Ok(())
 }
