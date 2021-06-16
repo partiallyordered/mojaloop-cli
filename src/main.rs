@@ -23,98 +23,95 @@
 //   - configure endpoints
 // - settlements
 
+use mojaloop_api::fspiox_api::common::{Amount, Currency, FspId};
 use std::io::Error;
 extern crate clap;
-use clap::{Arg, App, crate_version, AppSettings};
+use clap::{Arg, App, crate_version, AppSettings, Clap};
+
+#[derive(Clap)]
+#[clap(
+    setting = clap::AppSettings::ArgRequiredElseHelp,
+    version = clap::crate_version!(),
+    name = "Mojaloop CLI"
+)]
+struct Opts {
+    #[clap(short, long)]
+    kubernetes_config: Option<String>,
+    #[clap(subcommand)]
+    subcmd: SubCommand,
+}
+
+#[derive(Clap)]
+enum SubCommand {
+    #[clap(about = "Create, read, update, and upsert a single switch participant")]
+    Participant(Participant),
+    #[clap(about = "Create, read, enable, and disable accounts")]
+    Accounts(Accounts),
+}
+
+#[derive(Clap)]
+struct Participant {
+    #[clap(subcommand)]
+    subcmd: ParticipantSubCommand,
+}
+
+#[derive(Clap)]
+enum ParticipantSubCommand {
+    #[clap(about = "Upsert participant")]
+    Upsert(ParticipantUpsert),
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantUpsert {
+    #[clap(index = 1)]
+    name: FspId,
+    #[clap(short, long)]
+    currency: Option<Currency>,
+    #[clap(short, long, requires = "currency")]
+    ndc: Option<Amount>,
+    #[clap(short, long, requires = "currency")]
+    position: Option<Amount>,
+}
+
+#[derive(Clap)]
+struct Accounts {
+    #[clap(subcommand)]
+    subcmd: AccountsSubCommand,
+}
+
+#[derive(Clap)]
+enum AccountsSubCommand {
+    #[clap(about = "Create accounts")]
+    Create(AccountsCreate),
+}
+
+#[derive(Clap, Debug)]
+struct AccountsCreate {
+    #[clap(index = 1)]
+    participant_name: FspId,
+    #[clap(index = 2)]
+    currency: Currency,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let args = App::new("Mojaloop CLI")
-        .version(crate_version!())
-        .about("A command-line interface to the Mojaloop API")
-        .setting(AppSettings::ArgRequiredElseHelp)
-        .subcommand(App::new("accounts")
-            .about("Create, read, update, and fund switch accounts")
-            .setting(AppSettings::ArgRequiredElseHelp)
-            .subcommand(App::new("create")
-                .about("Create a switch account")
-                .arg(
-                    Arg::new("participant name")
-                        .about("The participant name")
-                        .index(1)
-                        .requires("currency")
-                        .required(true)
-                    )
-                .arg(
-                    Arg::new("currency")
-                        .about("The account currency")
-                        .index(2)
-                        .multiple(true)
-                )
-            )
-        )
-        .subcommand(App::new("participants")
-            .about("Create, read, and update switch participants")
-            .setting(AppSettings::ArgRequiredElseHelp)
-            .subcommand(App::new("create")
-                .about("Create participants")
-                .arg(
-                    Arg::new("name")
-                        .about("The participant name")
-                        .index(1)
-                        .multiple(true)
-                        .required(true)
-                )
-            )
-        )
-        .subcommand(App::new("participant")
-            .about("Create, read, update, and upsert a single switch participant. More granular than the `participants` subcommand.")
-            .setting(AppSettings::ArgRequiredElseHelp)
-            .subcommand(App::new("upsert")
-                .about("Upsert participant")
-                .arg(
-                    Arg::new("name")
-                        .about("The participant name")
-                        .index(1)
-                        .required(true)
-                )
-                .arg(
-                    Arg::new("currency")
-                        .about("The participant account currency")
-                        .long("currency")
-                        .short('c')
-                        .takes_value(true)
-                )
-                .arg(
-                    Arg::new("ndc")
-                        .about("The participant account NDC")
-                        .long("ndc")
-                        .short('n')
-                        .takes_value(true)
-                        .requires("currency")
-                )
-                .arg(
-                    Arg::new("position")
-                        .about("The participant account position")
-                        .long("position")
-                        .short('p')
-                        .takes_value(true)
-                        .requires("currency")
-                )
-            )
-        )
-        .get_matches();
+    let opts: Opts = Opts::parse();
 
-    match args.subcommand() {
-        Some(("participant", participant_args)) => {
-            match participant_args.subcommand() {
-                Some(("upsert", upsert_args)) => {
-                    println!("upsert args {:?}", upsert_args);
-                },
-                _ => println!("participant args {:?}", participant_args)
+    match opts.subcmd {
+        SubCommand::Participant(p) => {
+            match p.subcmd {
+                ParticipantSubCommand::Upsert(p) => {
+                    println!("participant upsert {:?}", p);
+                }
             }
         },
-        _ => ()
+        SubCommand::Accounts(accs) => {
+            match accs.subcmd {
+                AccountsSubCommand::Create(a) => {
+                    println!("account create {:?}", a);
+                }
+            }
+        },
     }
 
     Ok(())
