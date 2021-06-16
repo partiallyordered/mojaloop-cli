@@ -26,7 +26,7 @@
 use mojaloop_api::fspiox_api::common::{Amount, Currency, FspId};
 use std::io::Error;
 extern crate clap;
-use clap::{Arg, App, crate_version, AppSettings, Clap};
+use clap::Clap;
 
 #[derive(Clap)]
 #[clap(
