@@ -24,7 +24,8 @@
 // - settlements
 
 use mojaloop_api::{
-    central_ledger::participants::Participants,
+    common::{resp_from_raw_http, req_to_raw_http, Response, MlApiErr},
+    central_ledger::participants::{GetParticipants, Participants},
     fspiox_api::common::{Amount, Currency, FspId, ErrorResponse},
 };
 use std::convert::TryInto;
@@ -52,8 +53,11 @@ use tokio::io::AsyncWriteExt;
 struct Opts {
     #[clap(short, long)]
     kubeconfig: Option<String>,
-    #[clap(short, long, default_value = "default")]
-    namespace: String,
+    // TODO: all namespace option? Don't have a reserved "all" argument i.e. --namespace=all,
+    // because someone could call their real namespace "all". Probably try to go with common k8s
+    // flags for this, perhaps -A and --all-namespaces (check those are correct).
+    #[clap(short, long)]
+    namespace: Option<String>,
     #[clap(subcommand)]
     subcmd: SubCommand,
 }
@@ -167,17 +171,6 @@ async fn get_central_ledger_port_forward(client: Client) -> anyhow::Result<(impl
     ).await?;
     let mut ports = pf.ports().unwrap();
     let port = ports[0].stream().unwrap();
-    // port.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAccept: */*\r\n\r\n").await?;
-    // let mut rstream = tokio_util::io::ReaderStream::new(port);
-    // if let Some(res) = rstream.next().await {
-    //     match res {
-    //         Ok(bytes) => {
-    //             let response = std::str::from_utf8(&bytes[..]).unwrap();
-    //             println!("{}", response);
-    //         }
-    //         Err(err) => eprintln!("{:?}", err),
-    //     }
-    // }
     Ok(port)
 }
 
@@ -188,64 +181,20 @@ async fn main() -> anyhow::Result<()> {
     // (i.e. "I want this config") easier.
     // TODO: don't connect to k8s until after the opts have been parsed
     let client = Client::try_default().await?;
-    // TODO: this namespace should come from the program opts
-    // let pods: Api<Pod> = Api::namespaced(client, "default");
-    //
-    // // Find a single pod with the following label and container name. Port-forward the port with
-    // // the following port name.
-    // let label = "app.kubernetes.io/name=centralledger-service";
-    // let container_name = "centralledger-service";
-    // let port_name = "http-api";
-    //
-    // let lp = ListParams::default().labels(&label);
-    // let central_ledger_pod = pods
-    //     .list(&lp).await? // TODO: test connection error (or whatever might occur here- read the source)
-    //     .items.get(0).ok_or(MojaloopCliError::CentralLedgerAdminPodNotFound)?.clone();
-    // let central_ledger_pod_name = central_ledger_pod.metadata.name.clone().unwrap();
-    // let central_ledger_port = central_ledger_pod
-    //     .spec.ok_or(MojaloopCliError::UnexpectedCentralLedgerPodImplementation)?
-    //     .containers.iter().find(|c| c.name == container_name).ok_or(MojaloopCliError::CentralLedgerServiceContainerNotFound)?
-    //     .ports.as_ref().ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?
-    //     .iter().find(|p| p.name.as_ref().map_or(false, |name| name == port_name)).ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?.clone();
-    // println!("Central ledger pod name: {}", central_ledger_pod_name);
-    // println!("Central ledger port: {:?}", central_ledger_port);
-    //
-    // let mut pf = pods.portforward(
-    //     &central_ledger_pod_name,
-    //     &[central_ledger_port.container_port.try_into().unwrap()]
-    // ).await?;
-    // let mut ports = pf.ports().unwrap();
-    // let mut port = ports[0].stream().unwrap();
-    // port.write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nAccept: */*\r\n\r\n").await?;
-    // let mut rstream = tokio_util::io::ReaderStream::new(port);
-    // if let Some(res) = rstream.next().await {
-    //     match res {
-    //         Ok(bytes) => {
-    //             let response = std::str::from_utf8(&bytes[..]).unwrap();
-    //             println!("{}", response);
-    //         }
-    //         Err(err) => eprintln!("{:?}", err),
-    //     }
-    // }
 
     let mut port = get_central_ledger_port_forward(client).await?;
-    port.write_all(b"GET /participants HTTP/1.1\r\nConnection: close\r\nAccept: application/json\r\n\r\n").await?;
+    let get_participants = GetParticipants {};
+    // let data = b"GET /participants HTTP/1.1\r\nConnection: close\r\nAccept: application/json\r\n\r\n";
+    let data = req_to_raw_http(get_participants);
+    println!("{}", String::from_utf8(data.clone()).unwrap());
+    port.write_all(&data).await?;
     let mut rstream = tokio_util::io::ReaderStream::new(port);
     if let Some(res) = rstream.next().await {
         match res {
             Ok(bytes) => {
-                let str_response = std::str::from_utf8(&bytes[..]).unwrap();
-                let mut headers = [httparse::EMPTY_HEADER; 64];
-                let mut http_resp = httparse::Response::new(&mut headers);
-                // TODO: probably replace or at least map these unwraps
-                let parse_result = http_resp.parse(&bytes).unwrap().unwrap();
-                // let response_body: ErrorResponse = serde_json::from_slice(&bytes[parse_result..]).unwrap();
-                // println!("{:?}", response_body);
-                println!("{:?}", parse_result);
-                println!("{:?}", http_resp);
-                println!("{}", str_response);
-                let response_body: Participants = serde_json::from_slice(&bytes[parse_result..]).unwrap();
-                println!("{:?}", response_body);
+                // println!("{:?}", resp_from_raw_http::<Participants>(&bytes[..]));
+                let resp = resp_from_raw_http::<Participants>(&bytes[..])?;
+                println!("{:?}", resp);
             }
             Err(err) => eprintln!("{:?}", err),
         }
