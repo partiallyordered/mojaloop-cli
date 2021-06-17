@@ -15,3 +15,17 @@ Command-line interface to Mojaloop
     puppeteer primitives and CLI can be maintained in that repo, and this can be a slightly more
     general tool that doesn't require a puppeteer instance in the cluster, except when the
     puppeteer subcommand is used.
+- raw JSON output with -j
+- `mojaloop-cli participant somenonexistentparticipant create INR` can fail as follows:
+    ```
+    Error: Mojaloop API error: {"errorInformation":{"errorCode":"3003","errorDescription":"Add Party information error - Hub reconciliation account for the specified currency does not exist"}}
+    ```
+    when the Hub doesn't have an account in the correct currency. We should hint at the user as to
+    how to resolve this. And possibly provide the option of creating a hun reconciliation account
+    for said currency. Why ML doesn't just automatically have an account in each currency I do not
+    know. Could be worth raising an issue.
+- build for various platforms in CI, publish binaries to GH releases. See if it's possible to have
+    the released binary have the execute bit already set. Also, provide instructions for the
+    easiest possible way of running it.
+- build and publish a docker image containing only the cli so people can use it from docker run.
+    Publish to GHCR and dockerhub.

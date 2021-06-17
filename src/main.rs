@@ -24,8 +24,8 @@
 // - settlements
 
 use mojaloop_api::{
-    common::{resp_from_raw_http, req_to_raw_http, Response, MlApiErr},
-    central_ledger::participants::{GetParticipants, Participants},
+    common::{resp_from_raw_http, resp_headers_from_raw_http, req_to_raw_http, Response, MlApiErr},
+    central_ledger::participants::{GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
     fspiox_api::common::{Amount, Currency, FspId, ErrorResponse},
 };
 use std::convert::TryInto;
@@ -36,6 +36,9 @@ use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::api::apps::v1::Deployment;
 use thiserror::Error;
+
+use hyper::http::{Request, StatusCode};
+use hyper::{client::conn::Builder, Body};
 
 use kube::{
     api::{Api, DeleteParams, ListParams, PostParams, WatchEvent},
@@ -51,13 +54,25 @@ use tokio::io::AsyncWriteExt;
     name = "Mojaloop CLI"
 )]
 struct Opts {
+    /// Per-request timeout. A single command may make multiple requests.
+    #[clap(short, long, default_value = "30")]
+    timeout: u8,
+
+    /// Location of the kubeconfig file to use
     #[clap(short, long)]
     kubeconfig: Option<String>,
+
     // TODO: all namespace option? Don't have a reserved "all" argument i.e. --namespace=all,
     // because someone could call their real namespace "all". Probably try to go with common k8s
     // flags for this, perhaps -A and --all-namespaces (check those are correct).
+    /// Namespace in which to find the Mojaloop deployment
     #[clap(short, long)]
     namespace: Option<String>,
+
+    /// Produce all output as json
+    #[clap(short, long)]
+    json: bool,
+
     #[clap(subcommand)]
     subcmd: SubCommand,
 }
@@ -68,11 +83,25 @@ enum SubCommand {
     Participant(Participant),
     #[clap(about = "Create, read, enable, and disable accounts")]
     Accounts(Accounts),
+    #[clap(about = "List participants (for now)")]
+    Participants(Participants),
+}
+
+#[derive(Clap)]
+struct Participants {
+    #[clap(subcommand)]
+    subcmd: ParticipantsSubCommand,
+}
+
+#[derive(Clap)]
+enum ParticipantsSubCommand {
+    #[clap(about = "List participants")]
+    List,
 }
 
 #[derive(Clap)]
 struct Participant {
-    #[clap(index = 1)]
+    #[clap(index = 1, required = true)]
     name: FspId,
     #[clap(subcommand)]
     subcmd: ParticipantSubCommand,
@@ -81,22 +110,32 @@ struct Participant {
 #[derive(Clap)]
 enum ParticipantSubCommand {
     #[clap(about = "Modify participant account")]
-    Account(ParticipantAccount),
-    // #[clap(about = "Upsert participant")]
-    // Upsert(ParticipantAccountUpsert),
-    // Create(ParticipantCreate),
+    Accounts(ParticipantAccount),
+    #[clap(about = "Create a participant")]
+    Create(ParticipantCreate),
+}
+
+#[derive(Clap)]
+struct ParticipantCreate {
+    currency: Currency,
+    #[clap(default_value = "10000")]
+    ndc: u32,
+    #[clap(default_value = "10000")]
+    position: Amount,
 }
 
 #[derive(Clap)]
 struct ParticipantAccount {
     #[clap(subcommand)]
-    subcmd: ParticipantAccountSubCommand,
+    subcmd: ParticipantAccountsSubCommand,
 }
 
 #[derive(Clap)]
-enum ParticipantAccountSubCommand {
+enum ParticipantAccountsSubCommand {
     #[clap(about = "Upsert participant account")]
     Upsert(ParticipantAccountUpsert),
+    #[clap(about = "List participant accounts")]
+    List,
 }
 
 #[derive(Clap, Debug)]
@@ -143,7 +182,9 @@ enum MojaloopCliError {
     ClusterConnectionError,
 }
 
-async fn get_central_ledger_port_forward(client: Client) -> anyhow::Result<(impl tokio::io::AsyncRead+tokio::io::AsyncWrite+Unpin)> {
+async fn get_central_ledger_port_forward(client: Client) ->
+    anyhow::Result<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>
+{
     // Find a single pod with the following label and container name. Port-forward the port with
     // the following port name.
     let label = "app.kubernetes.io/name=centralledger-service";
@@ -170,44 +211,141 @@ async fn get_central_ledger_port_forward(client: Client) -> anyhow::Result<(impl
         &[central_ledger_port.container_port.try_into().unwrap()]
     ).await?;
     let mut ports = pf.ports().unwrap();
+    // Implemented as tokio::io::DuplexStream
     let port = ports[0].stream().unwrap();
     Ok(port)
 }
 
+async fn http_client_port_forward() {
+
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let opts: Opts = Opts::parse();
+
     // TODO: collect a list of actions to take, then pass them to a function that takes those
     // actions. This will make a --dry-run option easier. It will also make a declarative format
     // (i.e. "I want this config") easier.
-    // TODO: don't connect to k8s until after the opts have been parsed
-    let client = Client::try_default().await?;
-
-    let mut port = get_central_ledger_port_forward(client).await?;
-    let get_participants = GetParticipants {};
-    // let data = b"GET /participants HTTP/1.1\r\nConnection: close\r\nAccept: application/json\r\n\r\n";
-    let data = req_to_raw_http(get_participants);
-    println!("{}", String::from_utf8(data.clone()).unwrap());
-    port.write_all(&data).await?;
-    let mut rstream = tokio_util::io::ReaderStream::new(port);
-    if let Some(res) = rstream.next().await {
-        match res {
-            Ok(bytes) => {
-                // println!("{:?}", resp_from_raw_http::<Participants>(&bytes[..]));
-                let resp = resp_from_raw_http::<Participants>(&bytes[..])?;
-                println!("{:?}", resp);
-            }
-            Err(err) => eprintln!("{:?}", err),
-        }
-    }
-
-    let opts: Opts = Opts::parse();
-
+    // let operations = match opts.subcmd {
     match opts.subcmd {
-        SubCommand::Participant(p) => {
-            match p.subcmd {
-                ParticipantSubCommand::Account(pa) => {
-                    match pa.subcmd {
-                        ParticipantAccountSubCommand::Upsert(acc) => {
+        SubCommand::Participants(ps_args) => {
+            match ps_args.subcmd {
+                ParticipantsSubCommand::List => {
+                    use cli_table::{print_stdout, Cell, Table};
+
+                    let client = Client::try_default().await?;
+                    let mut central_ledger_conn = get_central_ledger_port_forward(client).await?;
+                    let get_participants_request = req_to_raw_http(GetParticipants {});
+                    central_ledger_conn.write_all(&get_participants_request).await?;
+                    let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
+                    let bytes = rstream.next().await.unwrap()?;
+                    let participants = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participants>(&bytes[..])?;
+
+                    for p in participants {
+                        println!(
+                            "Name: {}. Active: {}. Created: {}.",
+                            p.name,
+                            if p.is_active == 1 { true } else { false },
+                            p.created,
+                        );
+                        let table = p.accounts.iter().map(|a| vec![
+                            a.ledger_account_type.cell(),
+                            a.currency.cell(),
+                            (if a.is_active == 1 { true } else { false }).cell(),
+                        ])
+                            .table()
+                            .title(vec!["Account type".cell(), "Currency".cell(), "Active".cell()]);
+                        print_stdout(table)?;
+                        println!("");
+                    }
+                }
+            }
+        }
+
+        SubCommand::Participant(p_args) => {
+            match &p_args.subcmd {
+                ParticipantSubCommand::Create(pc) => {
+                    let client = Client::try_default().await?;
+                    let mut central_ledger_conn = get_central_ledger_port_forward(client).await?;
+                    let get_participants_request = req_to_raw_http(GetParticipants {});
+                    central_ledger_conn.write_all(&get_participants_request).await?;
+                    let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
+                    let bytes = rstream.next().await.unwrap()?;
+                    let existing_participants = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participants>(&bytes[..])?;
+
+                    match existing_participants.iter().find(|p| p.name == p_args.name) {
+                        Some(existing_participant) => {
+                            println!("Participant {} already exists.", existing_participant.name);
+                        },
+                        None => {
+                            let post_participants_request = req_to_raw_http(PostParticipant {
+                                participant: NewParticipant {
+                                    name: p_args.name.clone(),
+                                    currency: pc.currency,
+                                },
+                            });
+                            println!("Post participants:\n{}", String::from_utf8(post_participants_request.clone()).unwrap());
+                            central_ledger_conn.write_all(&post_participants_request).await?;
+                            let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
+                            let bytes = rstream.next().await.unwrap()?;
+                            let result = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participant>(&bytes[..])?;
+                            println!("Post participants result:\n{:?}", result);
+
+                            let post_initial_position_and_limits_req = req_to_raw_http(
+                                PostInitialPositionAndLimits {
+                                    name: p_args.name.clone(),
+                                    initial_position_and_limits: InitialPositionAndLimits {
+                                        currency: pc.currency,
+                                        limit: Limit {
+                                            r#type: LimitType::NetDebitCap,
+                                            value: pc.ndc,
+                                        },
+                                        initial_position: pc.position,
+                                    }
+                                }
+                            );
+                            println!("Post initial position and limits:\n{}", String::from_utf8(post_initial_position_and_limits_req.clone()).unwrap());
+                            central_ledger_conn.write_all(&post_initial_position_and_limits_req).await?;
+                            let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
+                            let bytes = rstream.next().await.unwrap()?;
+                            let result = resp_headers_from_raw_http(&bytes[..])?;
+                            println!("Post initial position and limits result:\n{:?}", result);
+
+                        },
+                    }
+                }
+                ParticipantSubCommand::Accounts(pa) => {
+                    match &pa.subcmd {
+                        ParticipantAccountsSubCommand::List => {
+                            let client = Client::try_default().await?;
+                            let central_ledger_conn = get_central_ledger_port_forward(client).await?;
+
+                            let (mut request_sender, connection) = Builder::new()
+                                .handshake(central_ledger_conn)
+                                .await?;
+
+                            // spawn a task to poll the connection and drive the HTTP state
+                            tokio::spawn(async move {
+                                if let Err(e) = connection.await {
+                                    eprintln!("Error in connection: {}", e);
+                                }
+                            });
+
+                            let request = Request::builder()
+                                .uri("/participants/stillnobodycares6/accounts")
+                                .method("GET")
+                                .body(Body::from(""))?;
+
+                            let response = request_sender.send_request(request).await?;
+                            println!("{:?}", response);
+                            assert!(response.status() == StatusCode::OK);
+
+                            let body = hyper::body::to_bytes(response.into_body()).await?;
+                            let accounts = serde_json::from_slice::<DfspAccounts>(&body);
+                            println!("{:?}", accounts);
+                        }
+                        ParticipantAccountsSubCommand::Upsert(acc) => {
                             println!("participant account upsert {:?}", acc);
                             // 1. get participant, make an error if it doesn't exist
                             // 2. get existing accounts
@@ -224,6 +362,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+
         SubCommand::Accounts(accs) => {
             match accs.subcmd {
                 AccountsSubCommand::Create(a) => {
