@@ -24,7 +24,7 @@
 // - settlements
 
 use mojaloop_api::{
-    common::{resp_from_raw_http, resp_headers_from_raw_http, req_to_raw_http, Response, MlApiErr},
+    common::{to_hyper_request, resp_from_raw_http, resp_headers_from_raw_http, req_to_raw_http, Response, MlApiErr},
     central_ledger::participants::{GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
     fspiox_api::common::{Amount, Currency, FspId, ErrorResponse},
 };
@@ -216,13 +216,55 @@ async fn get_central_ledger_port_forward(client: Client) ->
     Ok(port)
 }
 
-async fn http_client_port_forward() {
+// TODO: is it nicer to just call a different method if we don't want to parse the body? Instead of
+// returning a Result<Option<Resp>> we could return a Result<Resp>. The easy way to do this is to
+// split the function in half. We should also return the response _and_ the body, so the user can
+// use the response code and headers if they wish.
+async fn send_hyper_request<Resp>(
+    request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
+    req: hyper::Request<hyper::body::Body>
+) -> Result<Option<Resp>, serde_json::Error>
+where
+    Resp: serde::de::DeserializeOwned,
+{
+    // TODO: handle unwraps properly
+    let response = request_sender.send_request(req).await.unwrap();
+    assert!(response.status().is_success(), "{:?}", response);
 
+    // TODO:
+    // 1. this code can be better using option/result methods.
+    // 2. we can't really just not parse the body if the content length is zero, because content
+    //    length header is optional.
+    if let Some(length) = response.headers().get(hyper::header::CONTENT_LENGTH) {
+        if length != "0" {
+            let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+            serde_json::from_slice::<Resp>(&body).map(|res| Some(res))
+        } else {
+            Ok(None)
+        }
+    }
+    else {
+        Ok(None)
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
+
+    let client = Client::try_default().await?;
+    let central_ledger_conn = get_central_ledger_port_forward(client).await?;
+
+    let (mut request_sender, connection) = Builder::new()
+        .handshake(central_ledger_conn)
+        .await?;
+
+    // spawn a task to poll the connection and drive the HTTP state
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("Error in connection: {}", e);
+        }
+    });
 
     // TODO: collect a list of actions to take, then pass them to a function that takes those
     // actions. This will make a --dry-run option easier. It will also make a declarative format
@@ -234,13 +276,8 @@ async fn main() -> anyhow::Result<()> {
                 ParticipantsSubCommand::List => {
                     use cli_table::{print_stdout, Cell, Table};
 
-                    let client = Client::try_default().await?;
-                    let mut central_ledger_conn = get_central_ledger_port_forward(client).await?;
-                    let get_participants_request = req_to_raw_http(GetParticipants {});
-                    central_ledger_conn.write_all(&get_participants_request).await?;
-                    let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
-                    let bytes = rstream.next().await.unwrap()?;
-                    let participants = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participants>(&bytes[..])?;
+                    let request = to_hyper_request(GetParticipants {})?;
+                    let participants = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?.unwrap();
 
                     for p in participants {
                         println!(
@@ -266,33 +303,24 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Participant(p_args) => {
             match &p_args.subcmd {
                 ParticipantSubCommand::Create(pc) => {
-                    let client = Client::try_default().await?;
-                    let mut central_ledger_conn = get_central_ledger_port_forward(client).await?;
-                    let get_participants_request = req_to_raw_http(GetParticipants {});
-                    central_ledger_conn.write_all(&get_participants_request).await?;
-                    let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
-                    let bytes = rstream.next().await.unwrap()?;
-                    let existing_participants = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participants>(&bytes[..])?;
+                    let request = to_hyper_request(GetParticipants {})?;
+                    let existing_participants = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?.unwrap();
 
                     match existing_participants.iter().find(|p| p.name == p_args.name) {
                         Some(existing_participant) => {
                             println!("Participant {} already exists.", existing_participant.name);
                         },
                         None => {
-                            let post_participants_request = req_to_raw_http(PostParticipant {
+                            let post_participants_request = to_hyper_request(PostParticipant {
                                 participant: NewParticipant {
                                     name: p_args.name.clone(),
                                     currency: pc.currency,
                                 },
-                            });
-                            println!("Post participants:\n{}", String::from_utf8(post_participants_request.clone()).unwrap());
-                            central_ledger_conn.write_all(&post_participants_request).await?;
-                            let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
-                            let bytes = rstream.next().await.unwrap()?;
-                            let result = resp_from_raw_http::<mojaloop_api::central_ledger::participants::Participant>(&bytes[..])?;
-                            println!("Post participants result:\n{:?}", result);
+                            })?;
+                            let post_participants_result = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut request_sender, post_participants_request).await?.unwrap();
+                            println!("Post participants result:\n{:?}", post_participants_result);
 
-                            let post_initial_position_and_limits_req = req_to_raw_http(
+                            let post_initial_position_and_limits_req = to_hyper_request(
                                 PostInitialPositionAndLimits {
                                     name: p_args.name.clone(),
                                     initial_position_and_limits: InitialPositionAndLimits {
@@ -304,12 +332,8 @@ async fn main() -> anyhow::Result<()> {
                                         initial_position: pc.position,
                                     }
                                 }
-                            );
-                            println!("Post initial position and limits:\n{}", String::from_utf8(post_initial_position_and_limits_req.clone()).unwrap());
-                            central_ledger_conn.write_all(&post_initial_position_and_limits_req).await?;
-                            let mut rstream = tokio_util::io::ReaderStream::new(&mut central_ledger_conn);
-                            let bytes = rstream.next().await.unwrap()?;
-                            let result = resp_headers_from_raw_http(&bytes[..])?;
+                            )?;
+                            let result = send_hyper_request::<()>(&mut request_sender, post_initial_position_and_limits_req).await?;
                             println!("Post initial position and limits result:\n{:?}", result);
 
                         },
@@ -318,31 +342,9 @@ async fn main() -> anyhow::Result<()> {
                 ParticipantSubCommand::Accounts(pa) => {
                     match &pa.subcmd {
                         ParticipantAccountsSubCommand::List => {
-                            let client = Client::try_default().await?;
-                            let central_ledger_conn = get_central_ledger_port_forward(client).await?;
-
-                            let (mut request_sender, connection) = Builder::new()
-                                .handshake(central_ledger_conn)
-                                .await?;
-
-                            // spawn a task to poll the connection and drive the HTTP state
-                            tokio::spawn(async move {
-                                if let Err(e) = connection.await {
-                                    eprintln!("Error in connection: {}", e);
-                                }
-                            });
-
-                            let request = Request::builder()
-                                .uri("/participants/stillnobodycares6/accounts")
-                                .method("GET")
-                                .body(Body::from(""))?;
-
-                            let response = request_sender.send_request(request).await?;
-                            println!("{:?}", response);
-                            assert!(response.status() == StatusCode::OK);
-
-                            let body = hyper::body::to_bytes(response.into_body()).await?;
-                            let accounts = serde_json::from_slice::<DfspAccounts>(&body);
+                            let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
+                            let accounts = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?.unwrap();
+                            // TODO: table
                             println!("{:?}", accounts);
                         }
                         ParticipantAccountsSubCommand::Upsert(acc) => {
