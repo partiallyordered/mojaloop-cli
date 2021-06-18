@@ -24,8 +24,8 @@
 // - settlements
 
 use mojaloop_api::{
-    common::{to_hyper_request, resp_from_raw_http, resp_headers_from_raw_http, req_to_raw_http, Response, MlApiErr},
-    central_ledger::participants::{GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
+    common::{to_hyper_request, Response, MlApiErr},
+    central_ledger::participants::{HubAccountType, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
     fspiox_api::common::{Amount, Currency, FspId, ErrorResponse},
 };
 use std::convert::TryInto;
@@ -47,11 +47,14 @@ use kube::{
 
 use tokio::io::AsyncWriteExt;
 
+use cli_table::{print_stdout, Cell, Table};
+
 #[derive(Clap)]
 #[clap(
     setting = clap::AppSettings::ArgRequiredElseHelp,
     version = clap::crate_version!(),
-    name = "Mojaloop CLI"
+    name = "Mojaloop CLI",
+    rename_all = "kebab",
 )]
 struct Opts {
     /// Per-request timeout. A single command may make multiple requests.
@@ -65,7 +68,8 @@ struct Opts {
     // TODO: all namespace option? Don't have a reserved "all" argument i.e. --namespace=all,
     // because someone could call their real namespace "all". Probably try to go with common k8s
     // flags for this, perhaps -A and --all-namespaces (check those are correct).
-    /// Namespace in which to find the Mojaloop deployment
+    /// Namespace in which to find the Mojaloop deployment. Defaults to the default namespace in
+    /// your kubeconfig, or "default".
     #[clap(short, long)]
     namespace: Option<String>,
 
@@ -79,12 +83,63 @@ struct Opts {
 
 #[derive(Clap)]
 enum SubCommand {
-    #[clap(about = "Create, read, update, and upsert a single switch participant")]
+    /// Create, read, update, and upsert a single switch participant
     Participant(Participant),
-    #[clap(about = "Create, read, enable, and disable accounts")]
+    /// Create, read, enable, and disable accounts
     Accounts(Accounts),
-    #[clap(about = "List participants (for now)")]
+    /// List participants
     Participants(Participants),
+    /// Hub functions
+    Hub(Hub),
+}
+
+#[derive(Clap)]
+struct Hub {
+    #[clap(subcommand)]
+    subcmd: HubSubCommand,
+}
+
+#[derive(Clap)]
+enum HubSubCommand {
+    /// Create and read hub accounts
+    Accounts(HubAccounts)
+}
+
+#[derive(Clap)]
+struct HubAccounts {
+    #[clap(subcommand)]
+    subcmd: HubAccountsSubCommand,
+}
+
+#[derive(Clap)]
+enum HubAccountsSubCommand {
+    /// List hub accounts
+    List,
+    /// Create hub accounts
+    Create(HubAccountsCreate),
+    // TODO: upsert
+}
+
+#[derive(Clap, Debug)]
+struct HubAccountsCreate {
+    #[clap(subcommand)]
+    subcmd: HubAccountsCreateSubCommand,
+}
+
+#[derive(Clap, Debug)]
+enum HubAccountsCreateSubCommand {
+    /// Create multilateral settlement accounts
+    Sett(HubAccountsCreateOpts),
+    /// Create reconciliation accounts
+    Rec(HubAccountsCreateOpts),
+    /// Create all hub account types with one command
+    All(HubAccountsCreateOpts),
+}
+
+#[derive(Clap, Debug)]
+struct HubAccountsCreateOpts {
+    #[clap(index = 1, required = true, multiple = true)]
+    currencies: Vec<Currency>,
 }
 
 #[derive(Clap)]
@@ -95,7 +150,7 @@ struct Participants {
 
 #[derive(Clap)]
 enum ParticipantsSubCommand {
-    #[clap(about = "List participants")]
+    /// List participants
     List,
 }
 
@@ -109,9 +164,9 @@ struct Participant {
 
 #[derive(Clap)]
 enum ParticipantSubCommand {
-    #[clap(about = "Modify participant account")]
+    /// Modify participant account
     Accounts(ParticipantAccount),
-    #[clap(about = "Create a participant")]
+    /// Create a participant
     Create(ParticipantCreate),
 }
 
@@ -132,10 +187,42 @@ struct ParticipantAccount {
 
 #[derive(Clap)]
 enum ParticipantAccountsSubCommand {
-    #[clap(about = "Upsert participant account")]
+    /// Fund participant account
+    Fund(ParticipantAccountFund),
+    /// Upsert participant account
     Upsert(ParticipantAccountUpsert),
-    #[clap(about = "List participant accounts")]
+    /// List participant accounts
     List,
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantAccountFund {
+    #[clap(index = 1, required = true)]
+    currency: Currency,
+    #[clap(subcommand)]
+    subcmd: ParticipantAccountFundSubCommand,
+}
+
+#[derive(Clap, Debug)]
+enum ParticipantAccountFundSubCommand {
+    /// Process funds into the account.
+    In(ParticipantAccountFundsPositive),
+    /// Process funds out of the account.
+    Out(ParticipantAccountFundsPositive),
+    /// Fund a numeric amount. Positive: funds in. Negative: funds out. You'll likely need to
+    /// provide the argument after --, thus: participant my_participant fund XOF num -- -100
+    Num(ParticipantAccountFunds),
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantAccountFunds {
+    amount: Amount,
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantAccountFundsPositive {
+    // TODO: how to enforce this to be positive?
+    amount: Amount,
 }
 
 #[derive(Clap, Debug)]
@@ -156,7 +243,7 @@ struct Accounts {
 
 #[derive(Clap)]
 enum AccountsSubCommand {
-    #[clap(about = "Create accounts")]
+    /// Create accounts
     Create(AccountsCreate),
 }
 
@@ -168,6 +255,8 @@ struct AccountsCreate {
     currency: Currency,
 }
 
+// TODO: crate::Result (i.e. a result type for this crate, that uses this error type as its error
+// type). Probably just call this type "Error"?
 #[derive(Error, Debug)]
 enum MojaloopCliError {
     #[error("Couldn't find central ledger admin pod")]
@@ -180,6 +269,16 @@ enum MojaloopCliError {
     CentralLedgerServicePortNotFound,
     #[error("Couldn't retrieve pod list from cluster")]
     ClusterConnectionError,
+    #[error("Failed to send HTTP request to port-forwarded pod: {0}")]
+    PortForwardConnectionError(String),
+    #[error("Error parsing HTTP response from port-forwarded pod: {0}")]
+    PortForwardResponseParseError(String),
+    #[error("Expected HTTP response body but none was returned")]
+    PortForwardResponseNoBody,
+    #[error("Unhandled HTTP response from port-forwarded pod: {0}")]
+    PortForwardUnhandledResponse(String),
+    #[error("Mojaloop API error: {0}")]
+    MojaloopApiError(ErrorResponse),
 }
 
 async fn get_central_ledger_port_forward(client: Client) ->
@@ -211,41 +310,58 @@ async fn get_central_ledger_port_forward(client: Client) ->
         &[central_ledger_port.container_port.try_into().unwrap()]
     ).await?;
     let mut ports = pf.ports().unwrap();
-    // Implemented as tokio::io::DuplexStream
     let port = ports[0].stream().unwrap();
     Ok(port)
 }
 
-// TODO: is it nicer to just call a different method if we don't want to parse the body? Instead of
-// returning a Result<Option<Resp>> we could return a Result<Resp>. The easy way to do this is to
-// split the function in half. We should also return the response _and_ the body, so the user can
-// use the response code and headers if they wish.
+async fn send_hyper_request_no_response_body(
+    request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
+    req: hyper::Request<hyper::body::Body>
+) -> Result<(http::response::Parts, hyper::body::Bytes), MojaloopCliError>
+{
+    let resp = request_sender.send_request(req).await
+        .map_err(|e| MojaloopCliError::PortForwardConnectionError(format!("{}", e)))?;
+
+    // Got the response okay, need to check if we have an ML API error
+    let (parts, body) = resp.into_parts();
+
+    let body_bytes = hyper::body::to_bytes(body).await
+        .map_err(|e| MojaloopCliError::PortForwardResponseParseError(format!("{}", e)))?;
+
+    if !parts.status.is_success() {
+        serde_json::from_slice::<ErrorResponse>(&body_bytes)
+            .map_or_else(
+                |e| Err(MojaloopCliError::PortForwardResponseParseError(
+                        format!("Unhandled error parsing Mojaloop API error out of response {} {}", std::str::from_utf8(&body_bytes).unwrap(), e))),
+                        |ml_api_err| Err(MojaloopCliError::MojaloopApiError(ml_api_err))
+            )?
+    }
+    Ok((parts, body_bytes))
+}
+
 async fn send_hyper_request<Resp>(
     request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
     req: hyper::Request<hyper::body::Body>
-) -> Result<Option<Resp>, serde_json::Error>
+// ) -> Result<(<hyper::Response<hyper::body::Body> as Trait>::Parts, Resp), MojaloopCliError>
+) -> Result<(http::response::Parts, Resp), MojaloopCliError>
 where
     Resp: serde::de::DeserializeOwned,
 {
-    // TODO: handle unwraps properly
-    let response = request_sender.send_request(req).await.unwrap();
-    assert!(response.status().is_success(), "{:?}", response);
+    let (parts, body_bytes) = send_hyper_request_no_response_body(request_sender, req).await?;
+    let status = parts.status.as_u16();
 
-    // TODO:
-    // 1. this code can be better using option/result methods.
-    // 2. we can't really just not parse the body if the content length is zero, because content
-    //    length header is optional.
-    if let Some(length) = response.headers().get(hyper::header::CONTENT_LENGTH) {
-        if length != "0" {
-            let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-            serde_json::from_slice::<Resp>(&body).map(|res| Some(res))
-        } else {
-            Ok(None)
-        }
+    if body_bytes.len() == 0 {
+        return Err(MojaloopCliError::PortForwardResponseNoBody)
     }
-    else {
-        Ok(None)
-    }
+
+    let body_obj = match status {
+        200..=202 => serde_json::from_slice::<Resp>(&body_bytes)
+            .map_err(|e| MojaloopCliError::PortForwardResponseParseError(
+                format!("Unhandled error parsing body out of response {} {}", std::str::from_utf8(&body_bytes).unwrap(), e))),
+        s => Err(MojaloopCliError::PortForwardUnhandledResponse(format!("{}", s))),
+    }?;
+
+    Ok((parts, body_obj))
 }
 
 #[tokio::main]
@@ -268,16 +384,100 @@ async fn main() -> anyhow::Result<()> {
 
     // TODO: collect a list of actions to take, then pass them to a function that takes those
     // actions. This will make a --dry-run option easier. It will also make a declarative format
-    // (i.e. "I want this config") easier.
+    // (i.e. "I want this config") easier. Operations could look like this:
+    // enum Operations {
+    //   CreateHubMultilateralSettlementAccount({ currency: Currency }),
+    //   CreateParticipantAccount({ currency: Currency }),
+    // }
+    // This would serialise fairly easily to something presentable to a user, and consumable by
+    // code. It could get complicated if the output of one command guided subsequent commands. But
+    // perhaps it's better to let the user make decisions? Alternatively, we _could_ have a tree of
+    // actions and encode inputs and outputs. Getting pretty complex now, maybe not the best idea.
+    // This is what a programming language is for. This tool should instead focus on simplicity.
+    // The Operations and corresponding functionality could be exported to be used elsewhere.
     // let operations = match opts.subcmd {
     match opts.subcmd {
+        SubCommand::Hub(hub_args) => {
+            match hub_args.subcmd {
+                HubSubCommand::Accounts(hub_accs_args) => {
+                    match hub_accs_args.subcmd {
+                        HubAccountsSubCommand::Create(hub_accs_create_args) => {
+                            async fn create_hub_account(
+                                request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
+                                currency: Currency,
+                                r#type: HubAccountType
+                            ) -> Result<(), MojaloopCliError> {
+                                let request = to_hyper_request(PostHubAccount {
+                                    name: "Hub".to_string(),
+                                    account: HubAccount {
+                                        r#type,
+                                        currency,
+                                    }
+                                }).unwrap();
+                                send_hyper_request_no_response_body(request_sender, request).await?;
+                                let str_hub_acc_type = match r#type {
+                                    HubAccountType::HubMultilateralSettlement => "settlement",
+                                    HubAccountType::HubReconciliation => "reconciliation",
+                                };
+                                println!("Created hub {} account: {}", str_hub_acc_type, currency);
+                                Ok(())
+                            }
+                            match hub_accs_create_args.subcmd {
+                                HubAccountsCreateSubCommand::Rec(hub_accs_create_rec_args) => {
+                                    for currency in &hub_accs_create_rec_args.currencies {
+                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubReconciliation).await?;
+                                    }
+                                }
+                                HubAccountsCreateSubCommand::Sett(hub_accs_create_sett_args) => {
+                                    for currency in &hub_accs_create_sett_args.currencies {
+                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                    }
+                                }
+                                HubAccountsCreateSubCommand::All(hub_accs_create_all_args) => {
+                                    for currency in &hub_accs_create_all_args.currencies {
+                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubReconciliation).await?;
+                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                    }
+                                }
+                            }
+                        }
+                        HubAccountsSubCommand::List => {
+                            // TODO: might need to take hub name as a parameter, in order to
+                            // support newer and older hub names of "hub" and "Hub"? Or just don't
+                            // support old hub name? Or just try both?
+                            let request = to_hyper_request(GetDfspAccounts { name: "Hub".to_string() })?;
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?;
+                            let table = accounts.iter().map(|a| vec![
+                                a.ledger_account_type.cell(),
+                                a.currency.cell(),
+                                (if a.is_active == 1 { true } else { false }).cell(),
+                                a.changed_date.cell(),
+                                a.value.cell(),
+                                a.reserved_value.cell(),
+                            ])
+                            .table()
+                            .title(vec![
+                                "Account type".cell(),
+                                "Currency".cell(),
+                                "Active".cell(),
+                                "Changed date".cell(),
+                                "Notification threshold".cell(),
+                                "Reserved value".cell(),
+                            ]);
+                            print_stdout(table)?;
+                        }
+                    }
+                }
+            }
+        }
+
         SubCommand::Participants(ps_args) => {
             match ps_args.subcmd {
                 ParticipantsSubCommand::List => {
-                    use cli_table::{print_stdout, Cell, Table};
-
                     let request = to_hyper_request(GetParticipants {})?;
-                    let participants = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?.unwrap();
+                    let (_, participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?;
+
+                    // TODO: additional CLI parameters to get more information about participants
 
                     for p in participants {
                         println!(
@@ -291,8 +491,9 @@ async fn main() -> anyhow::Result<()> {
                             a.currency.cell(),
                             (if a.is_active == 1 { true } else { false }).cell(),
                         ])
-                            .table()
-                            .title(vec!["Account type".cell(), "Currency".cell(), "Active".cell()]);
+                        .table()
+                        .title(vec!["Account type".cell(), "Currency".cell(), "Active".cell()]);
+
                         print_stdout(table)?;
                         println!("");
                     }
@@ -304,7 +505,7 @@ async fn main() -> anyhow::Result<()> {
             match &p_args.subcmd {
                 ParticipantSubCommand::Create(pc) => {
                     let request = to_hyper_request(GetParticipants {})?;
-                    let existing_participants = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?.unwrap();
+                    let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?;
 
                     match existing_participants.iter().find(|p| p.name == p_args.name) {
                         Some(existing_participant) => {
@@ -317,7 +518,7 @@ async fn main() -> anyhow::Result<()> {
                                     currency: pc.currency,
                                 },
                             })?;
-                            let post_participants_result = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut request_sender, post_participants_request).await?.unwrap();
+                            let (_, post_participants_result) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut request_sender, post_participants_request).await?;
                             println!("Post participants result:\n{:?}", post_participants_result);
 
                             let post_initial_position_and_limits_req = to_hyper_request(
@@ -333,17 +534,22 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                             )?;
-                            let result = send_hyper_request::<()>(&mut request_sender, post_initial_position_and_limits_req).await?;
-                            println!("Post initial position and limits result:\n{:?}", result);
+                            let (result, _) = send_hyper_request_no_response_body(&mut request_sender, post_initial_position_and_limits_req).await?;
+                            println!("Post initial position and limits result:\n{:?}", result.status);
+
+                            // TODO: 
 
                         },
                     }
                 }
                 ParticipantSubCommand::Accounts(pa) => {
                     match &pa.subcmd {
+                        ParticipantAccountsSubCommand::Fund(part_acc_fund_args) => {
+                            println!("part_acc_fund_args {:?}", part_acc_fund_args);
+                        }
                         ParticipantAccountsSubCommand::List => {
                             let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
-                            let accounts = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?.unwrap();
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?;
                             // TODO: table
                             println!("{:?}", accounts);
                         }

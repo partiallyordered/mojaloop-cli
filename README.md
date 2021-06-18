@@ -29,3 +29,16 @@ Command-line interface to Mojaloop
     easiest possible way of running it.
 - build and publish a docker image containing only the cli so people can use it from docker run.
     Publish to GHCR and dockerhub.
+- asciinema demo
+- take a role in actual deployment? I.e. assist users to get a DO/minikube cluster with ML
+    deployed?
+- `mojaloop-cli hub accounts create sett EUR GBP ZZZ`
+    produces:
+    ```
+    error: Invalid value for '<currencies>...': Matching variant not found
+
+    For more information try --help
+    ```
+    because the `ZZZ` currency is missing. This is a moderately opaque error message.
+- can Clap use types to provide help information? Can we, for instance, provide some impls on
+    foreign types to provide default help information? For example on Currency or Amount types?
