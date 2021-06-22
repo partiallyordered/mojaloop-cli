@@ -1,6 +1,11 @@
 # mojaloop-cli
 Command-line interface to Mojaloop
 
+## Build
+```sh
+nix-shell --run 'cargo b'
+```
+
 ### TODO
 - puppet should be able to "hijack" fsps temporarily by
   1. getting their endpoints and storing them locally

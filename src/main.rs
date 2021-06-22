@@ -28,9 +28,10 @@ use mojaloop_api::{
     central_ledger::participants::{HubAccountType, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
 };
 use fspiox_api::{
-    build_transfer_prepare, FspiopRequestBody,
+    build_post_quotes, build_transfer_prepare, FspiopRequestBody,
     common::{Amount, Currency, FspId, ErrorResponse, CorrelationId},
-    transfer::TransferState,
+    transfer,
+    quote,
 };
 
 extern crate clap;
@@ -105,18 +106,85 @@ enum SubCommand {
     /// complex implementation, use the puppet subcommand to this utility.
     #[clap(alias = "tx")]
     Transfer(Transfer),
+    Quote(Quote),
     // /// Complex behaviours and scenarios that require a component deployed to the cluster to
     // /// simulate participants.
     // Puppet(Puppet),
 }
 
 #[derive(Clap)]
+struct Quote {
+    #[clap(subcommand)]
+    subcmd: QuoteSubCommand,
+}
+
+#[derive(Clap)]
+enum QuoteSubCommand {
+    #[clap(alias = "new")]
+    Create(QuoteCreate),
+}
+
+#[derive(Clap)]
+struct QuoteCreate {
+    #[clap(index = 1, required = true)]
+    from: FspId,
+    #[clap(index = 2, required = true)]
+    to: FspId,
+    #[clap(index = 3, required = true)]
+    currency: Currency,
+    // TODO: take multiple
+    #[clap(index = 4, required = true)]
+    amount: Amount,
+}
+
+#[derive(Clap)]
 struct Puppet {
     #[clap(short,long)]
+    /// Create any participants, accounts etc. required by this command where they do not exist.
+    ///
+    /// If participants used by this command do exist, this utility will exit with an error before
+    /// taking any action. To use existing participants, if they exist, and create them if they do
+    /// not exist, combine this flag with the --hijack flag.
     create: bool,
+    /// Disable participants and accounts created by this command.
+    #[clap(short,long)]
+    cleanup_created: bool,
+    /// Disable any participants and accounts used by this command once the command has been executed
+    ///
+    /// Disable participants and accounts used by this command. Warning: this will disable
+    /// participants and accounts that existed _before_ this command was called.
     #[clap(short,long)]
     cleanup: bool,
+    /// Take control of any participants specified in this command
+    ///
+    /// This will temporarily reroute all endpoints for any participants used in this command to
+    /// puppeteer. This means the entity normally configured to receive FSPIOP requests at these
+    /// endpoints will not receive them. Endpoints will be restored after the command completes.
+    #[clap(short,long)]
+    hijack: bool,
+    #[clap(subcommand)]
+    subcmd: PuppetSubCommand,
 }
+
+#[derive(Clap)]
+enum PuppetSubCommand {
+    Transfer(PuppetTransfer),
+}
+
+#[derive(Clap)]
+struct PuppetTransfer {
+    #[clap(subcommand)]
+    subcmd: PuppetTransferSubCommand,
+}
+
+#[derive(Clap)]
+enum PuppetTransferSubCommand {
+    /// Create a transfer from an existing quote
+    FromQuote(PuppetTransferFromQuote),
+}
+
+#[derive(Clap)]
+struct PuppetTransferFromQuote {}
 
 #[derive(Clap)]
 struct Transfer {
@@ -146,20 +214,64 @@ enum TransferSubCommand {
 
 #[derive(Clap)]
 struct TransferPrepare {
+    #[clap(subcommand)]
+    subcmd: TransferPrepareSubCommand,
+}
+
+#[derive(Clap)]
+enum TransferPrepareSubCommand {
+    /// Prepare a transfer without an existing transaction ID
+    New(TransferPrepareNew),
+    /// Prepare a transfer from an existing quote transaction ID
+    ///
+    /// Note that we can't call GET /quotes here to fill the details of the 
+    FromTransaction(TransferPrepareWithId),
+}
+
+#[derive(Clap)]
+struct TransferPrepareWithId {
+    // TODO: we probably should use quote::TransactionId here for correctness, but note that
+    // TransactionId and TransferId should be totally interchangeable. Everywhere a TransactionId
+    // is used, a TransferId should be accepted, and vice versa. Or not? E.g., an existing
+    // TransferId should not be used for a quote request. This todo mostly exists as a reminder to
+    // think about the implications of these types, and to perhaps modify the API types in
+    // fspiox-api to match conclusions. I.e. we might actually want to say
+    //   pub type TransactionId = transfer::TransferId
+    from: FspId,
+    #[clap(index = 2, required = true)]
+    to: FspId,
+    #[clap(index = 3, required = true)]
+    currency: Currency,
+    // TODO: it might be possible to put these under flags or a subcommand or similar to allow
+    // multiple. I.e. we might be able to say
+    //   mojaloop-cli transfer prepare from-transaction payerfsp payeefsp XOF \
+    //     send 100 e1f3c512-dd8e-4b5b-ad59-4e87bf97fcb8 \
+    //     send 200 e1f3c512-dd8e-4b5b-ad59-4e87bf97fcb8 \
+    //     ...
+    // or similar
+    #[clap(index = 4, required = true)]
+    amount: Amount,
+    #[clap(index = 1, required = true)]
+    transfer_id: transfer::TransferId,
+}
+
+#[derive(Clap)]
+struct TransferPrepareNew {
     #[clap(index = 1, required = true)]
     from: FspId,
     #[clap(index = 2, required = true)]
     to: FspId,
     #[clap(index = 3, required = true)]
     currency: Currency,
-    #[clap(index = 4, required = true, multiple = true)]
+    // TODO: take multiple
+    #[clap(index = 4, required = true)]
     amount: Amount,
 }
 
 #[derive(Clap)]
 struct TransferFulfil {
     #[clap(index = 1, default_value = "COMMITTED")]
-    state: TransferState,
+    state: transfer::TransferState,
     #[clap(index = 2, required = true, multiple = true)]
     id: CorrelationId,
 }
@@ -173,7 +285,7 @@ struct TransferPrepareFulfil {
     #[clap(index = 3, required = true)]
     currency: Currency,
     #[clap(index = 4, default_value = "COMMITTED")]
-    state: TransferState,
+    state: transfer::TransferState,
     #[clap(index = 5, required = true, multiple = true)]
     amount: Amount,
 }
@@ -414,6 +526,7 @@ mod port_forward {
     pub enum Services {
         CentralLedger,
         MlApiAdapter,
+        QuotingService,
     }
 
     enum Port {
@@ -433,6 +546,14 @@ mod port_forward {
 
         for s in services {
             match s {
+                Services::QuotingService => result.push(
+                    from_params(
+                        &pods,
+                        "app.kubernetes.io/name=quoting-service",
+                        "quoting-service",
+                        Port::Name("http-api".to_string()),
+                    ).await?
+                ),
                 Services::CentralLedger => result.push(
                     from_params(
                         &pods,
@@ -514,10 +635,23 @@ async fn main() -> anyhow::Result<()> {
     let mut port_forwards = port_forward::get(&opts.namespace, &[
         port_forward::Services::CentralLedger,
         port_forward::Services::MlApiAdapter,
+        port_forward::Services::QuotingService,
     ]).await?;
     // In reverse order than they were requested
+    let quoting_service_stream = port_forwards.pop().unwrap();
     let ml_api_adapter_stream = port_forwards.pop().unwrap();
     let central_ledger_stream = port_forwards.pop().unwrap();
+
+    let (mut quoting_service_request_sender, quoting_service_connection) = Builder::new()
+        .handshake(quoting_service_stream)
+        .await?;
+
+    // spawn a task to poll the connection and drive the HTTP state
+    tokio::spawn(async move {
+        if let Err(e) = quoting_service_connection.await {
+            eprintln!("Error in connection: {}", e);
+        }
+    });
 
     let (mut ml_api_adapter_request_sender, ml_api_adapter_connection) = Builder::new()
         .handshake(ml_api_adapter_stream)
@@ -556,23 +690,67 @@ async fn main() -> anyhow::Result<()> {
     // The Operations and corresponding functionality could be exported to be used elsewhere.
     // let operations = match opts.subcmd {
     match opts.subcmd {
-        SubCommand::Transfer(transfer_args) => {
-            match transfer_args.subcmd {
-                TransferSubCommand::Prepare(transfer_prepare_args) => {
-                    let transfer_prepare = build_transfer_prepare(
-                        transfer_prepare_args.from,
-                        transfer_prepare_args.to,
-                        transfer_prepare_args.amount,
-                        transfer_prepare_args.currency,
+        SubCommand::Quote(quote_args) => {
+            match quote_args.subcmd {
+                QuoteSubCommand::Create(quote_create_args) => {
+                    let post_quote = build_post_quotes(
+                        quote_create_args.from,
+                        quote_create_args.to,
+                        quote_create_args.amount,
+                        quote_create_args.currency,
                     );
-                    let transfer_id = if let FspiopRequestBody::TransferPrepare(body) = &transfer_prepare.body {
-                        body.transfer_id
+                    let (quote_id, transaction_id) = if let FspiopRequestBody::PostQuotes(body) = &post_quote.body {
+                        (body.quote_id, body.transaction_id)
                     } else {
                         panic!();
                     };
-                    let request = fspiox_api::to_hyper_request(transfer_prepare).unwrap();
-                    send_hyper_request_no_response_body(&mut ml_api_adapter_request_sender, request).await?;
-                    println!("{}", transfer_id);
+                    let request = fspiox_api::to_hyper_request(post_quote).unwrap();
+                    send_hyper_request_no_response_body(&mut quoting_service_request_sender, request).await?;
+                    println!("{{ \"quote_id\": \"{}\", \"transaction_id\": \"{}\" }}", quote_id, transaction_id);
+                }
+            }
+        }
+
+        SubCommand::Transfer(transfer_args) => {
+            match transfer_args.subcmd {
+                TransferSubCommand::Prepare(transfer_prepare_args) => {
+                    match transfer_prepare_args.subcmd {
+                        TransferPrepareSubCommand::New(transfer_prepare_new_args) => {
+                            let transfer_prepare = build_transfer_prepare(
+                                transfer_prepare_new_args.from,
+                                transfer_prepare_new_args.to,
+                                transfer_prepare_new_args.amount,
+                                transfer_prepare_new_args.currency,
+                                None,
+                            );
+                            let transfer_id = if let FspiopRequestBody::TransferPrepare(body) = &transfer_prepare.body {
+                                body.transfer_id
+                            } else {
+                                panic!();
+                            };
+                            let request = fspiox_api::to_hyper_request(transfer_prepare).unwrap();
+                            send_hyper_request_no_response_body(&mut ml_api_adapter_request_sender, request).await?;
+                            println!("{}", transfer_id);
+                        },
+                        TransferPrepareSubCommand::FromTransaction(transfer_prepare_from_transaction_args) => {
+                            // TODO: dedupe this with the above, if possible
+                            let transfer_prepare = build_transfer_prepare(
+                                transfer_prepare_from_transaction_args.from,
+                                transfer_prepare_from_transaction_args.to,
+                                transfer_prepare_from_transaction_args.amount,
+                                transfer_prepare_from_transaction_args.currency,
+                                Some(transfer_prepare_from_transaction_args.transfer_id),
+                            );
+                            let transfer_id = if let FspiopRequestBody::TransferPrepare(body) = &transfer_prepare.body {
+                                body.transfer_id
+                            } else {
+                                panic!();
+                            };
+                            let request = fspiox_api::to_hyper_request(transfer_prepare).unwrap();
+                            send_hyper_request_no_response_body(&mut ml_api_adapter_request_sender, request).await?;
+                            println!("{}", transfer_id);
+                        },
+                    }
                 }
             }
         }
