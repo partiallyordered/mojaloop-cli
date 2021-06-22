@@ -106,6 +106,7 @@ enum SubCommand {
     /// complex implementation, use the puppet subcommand to this utility.
     #[clap(alias = "tx")]
     Transfer(Transfer),
+    /// Create quotes
     Quote(Quote),
     // /// Complex behaviours and scenarios that require a component deployed to the cluster to
     // /// simulate participants.

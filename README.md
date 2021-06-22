@@ -10,6 +10,12 @@ cargo b
 nix-shell --run 'cargo b'
 ```
 
+## Release
+```sh
+git tag vX.Y.Z # replace X, Y, Z with something appropriate, preferably the version in Cargo
+git push --tags
+```
+
 ### TODO
 - puppet should be able to "hijack" fsps temporarily by
   1. getting their endpoints and storing them locally

@@ -95,6 +95,18 @@ jobs:
         echo "RELEASE_VERSION=$release_version" >> $GITHUB_ENV
         echo "release version: $RELEASE_VERSION"
 
+    - name: Install tools and libs
+      shell: bash
+      run: |
+        case $RUNNER_OS in
+            Linux)
+                apt-get update
+                apt-get install -y pkg-config libssl-dev
+                ;;
+            macOS)
+                brew install pkg-config
+                ;;
+
     - name: build
       uses: actions-rs/cargo@v1
       with:
