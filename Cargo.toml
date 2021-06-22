@@ -28,3 +28,4 @@ serde_json = "1.0"
 kube = { git = "https://github.com/kazk/kube-rs", rev = "e1b02c57d9ebd5bbf0d93b244a7be4b7438d3b66", features = ["ws"] }
 kube-runtime = { version = "0.56.0" }
 k8s-openapi = { version = "0.11.0", default-features = false, features = ["v1_20"] }
+openssl = { version = "0.10", features = ["vendored"] }
