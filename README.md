@@ -3,6 +3,10 @@ Command-line interface to Mojaloop
 
 ## Build
 ```sh
+cargo b
+```
+### With Nix
+```sh
 nix-shell --run 'cargo b'
 ```
 
