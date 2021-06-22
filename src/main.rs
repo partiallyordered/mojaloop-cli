@@ -237,6 +237,7 @@ struct TransferPrepareWithId {
     // think about the implications of these types, and to perhaps modify the API types in
     // fspiox-api to match conclusions. I.e. we might actually want to say
     //   pub type TransactionId = transfer::TransferId
+    #[clap(index = 1, required = true)]
     from: FspId,
     #[clap(index = 2, required = true)]
     to: FspId,
@@ -251,7 +252,7 @@ struct TransferPrepareWithId {
     // or similar
     #[clap(index = 4, required = true)]
     amount: Amount,
-    #[clap(index = 1, required = true)]
+    #[clap(index = 5, required = true)]
     transfer_id: transfer::TransferId,
 }
 
