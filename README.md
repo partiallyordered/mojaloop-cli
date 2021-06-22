@@ -2,6 +2,22 @@
 Command-line interface to Mojaloop
 
 ### TODO
+- puppet should be able to "hijack" fsps temporarily by
+  1. getting their endpoints and storing them locally
+  2. modifying their endpoints so that it becomes the endpoint for those fsps
+  3. running a sequence of transfers that it manages
+  4. restoring their endpoints to the endpoints stored in (1)
+  This means it'll be able to control transfers on a switch that has simulators. This "hijack"
+  functionality should perhaps be behind a flag "--hijack" or something, so the user sort of knows.
+- a "initial-setup" subcommand or similar, intended to preconfigure the switch with
+  - hub accounts in a certain currency or currencies (probably just one?)
+  - a number of participants with
+    - endpoints (probably from a template)
+    - accounts in the "switch currency/ies"
+  Make this command idempotent, or at least able to ignore certain errors, so it's possible to run
+  it for multiple currencies, or to "add this functionality/these-dfsps to this switch"
+- better logging, a verbose mode of some sort. Probably use slog to enable logs to be printed as
+    json in json mode, and text in text mode.
 - put git revision (and possibly link to repo at that revision) in -v flag
 - check out https://docs.rs/clap/3.0.0-beta.2/clap/enum.AppSettings.html
 - try `mojaloop-cli somethingthatdoesnotexist`- is the output sensible? useful?

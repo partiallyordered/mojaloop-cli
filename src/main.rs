@@ -26,15 +26,17 @@
 use mojaloop_api::{
     common::{to_hyper_request, Response, MlApiErr},
     central_ledger::participants::{HubAccountType, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
-    fspiox_api::common::{Amount, Currency, FspId, ErrorResponse},
 };
-use std::convert::TryInto;
+use fspiox_api::{
+    build_transfer_prepare, FspiopRequestBody,
+    common::{Amount, Currency, FspId, ErrorResponse, CorrelationId},
+    transfer::TransferState,
+};
+
 extern crate clap;
 use clap::Clap;
 
 use futures::{StreamExt, TryStreamExt};
-use k8s_openapi::api::core::v1::Pod;
-use k8s_openapi::api::apps::v1::Deployment;
 use thiserror::Error;
 
 use hyper::http::{Request, StatusCode};
@@ -91,6 +93,89 @@ enum SubCommand {
     Participants(Participants),
     /// Hub functions
     Hub(Hub),
+    /// Execute transfers
+    ///
+    /// Note that this implementation is rather simplistic and does not verify that actions it
+    /// takes are successful, because it would require some manner of FSP implementation to receive
+    /// forwarded transfer prepare/fulfil requests from the switch. Therefore, this functionality
+    /// generally expects the user to have deployed simulators to receive transfer prepare and
+    /// fulfil messages.
+    ///
+    /// For a more complete, but more
+    /// complex implementation, use the puppet subcommand to this utility.
+    #[clap(alias = "tx")]
+    Transfer(Transfer),
+    // /// Complex behaviours and scenarios that require a component deployed to the cluster to
+    // /// simulate participants.
+    // Puppet(Puppet),
+}
+
+#[derive(Clap)]
+struct Puppet {
+    #[clap(short,long)]
+    create: bool,
+    #[clap(short,long)]
+    cleanup: bool,
+}
+
+#[derive(Clap)]
+struct Transfer {
+    #[clap(subcommand)]
+    subcmd: TransferSubCommand,
+}
+
+#[derive(Clap)]
+enum TransferSubCommand {
+    /// Prepare (POST) a transfer.
+    ///
+    /// The transfer correlation ID will be generated and printed as output.
+    #[clap(alias = "post")]
+    Prepare(TransferPrepare),
+    // /// Fulfil (PUT) a transfer.
+    // ///
+    // /// You'll probably want to use a correlation ID from a transfer prepare here.
+    // #[clap(alias = "put")]
+    // Fulfil(TransferFulfil),
+    // /// Prepare and fulfil a transfer.
+    // ///
+    // /// This command has no way of determining whether a transfer prepare has been received by the
+    // /// intended recipient. It therefore waits a configurable amount of time for this to occur
+    // /// between sending prepares and fulfils.
+    // PrepareFulfil(TransferPrepareFulfil),
+}
+
+#[derive(Clap)]
+struct TransferPrepare {
+    #[clap(index = 1, required = true)]
+    from: FspId,
+    #[clap(index = 2, required = true)]
+    to: FspId,
+    #[clap(index = 3, required = true)]
+    currency: Currency,
+    #[clap(index = 4, required = true, multiple = true)]
+    amount: Amount,
+}
+
+#[derive(Clap)]
+struct TransferFulfil {
+    #[clap(index = 1, default_value = "COMMITTED")]
+    state: TransferState,
+    #[clap(index = 2, required = true, multiple = true)]
+    id: CorrelationId,
+}
+
+#[derive(Clap)]
+struct TransferPrepareFulfil {
+    #[clap(index = 1, required = true)]
+    from: FspId,
+    #[clap(index = 2, required = true)]
+    to: FspId,
+    #[clap(index = 3, required = true)]
+    currency: Currency,
+    #[clap(index = 4, default_value = "COMMITTED")]
+    state: TransferState,
+    #[clap(index = 5, required = true, multiple = true)]
+    amount: Amount,
 }
 
 #[derive(Clap)]
@@ -258,17 +343,17 @@ struct AccountsCreate {
 // TODO: crate::Result (i.e. a result type for this crate, that uses this error type as its error
 // type). Probably just call this type "Error"?
 #[derive(Error, Debug)]
-enum MojaloopCliError {
+pub enum MojaloopCliError {
     #[error("Couldn't find central ledger admin pod")]
     CentralLedgerAdminPodNotFound,
-    #[error("Unexpected central ledger pod implementation")]
+    #[error("Unexpected central ledger pod manifest implementation")]
     UnexpectedCentralLedgerPodImplementation,
     #[error("Central ledger service container not found in pod")]
     CentralLedgerServiceContainerNotFound,
     #[error("Ports not present on central ledger service container")]
     CentralLedgerServicePortNotFound,
-    #[error("Couldn't retrieve pod list from cluster")]
-    ClusterConnectionError,
+    #[error("Couldn't retrieve pod list from cluster: {0}")]
+    ClusterConnectionError(kube::Error),
     #[error("Failed to send HTTP request to port-forwarded pod: {0}")]
     PortForwardConnectionError(String),
     #[error("Error parsing HTTP response from port-forwarded pod: {0}")]
@@ -281,38 +366,96 @@ enum MojaloopCliError {
     MojaloopApiError(ErrorResponse),
 }
 
-async fn get_central_ledger_port_forward(client: Client) ->
-    anyhow::Result<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>
-{
-    // Find a single pod with the following label and container name. Port-forward the port with
-    // the following port name.
-    let label = "app.kubernetes.io/name=centralledger-service";
-    let container_name = "centralledger-service";
-    let port_name = "http-api";
+mod port_forward {
+    use kube::{
+        api::{Api, ListParams},
+        Client,
+    };
+    use k8s_openapi::api::core::v1::Pod;
+    use crate::MojaloopCliError;
+    use std::convert::TryInto;
 
-    // TODO: this namespace should come from the program opts
-    let pods: Api<Pod> = Api::namespaced(client, "default");
-    let lp = ListParams::default().labels(&label);
-    let central_ledger_pod = pods
-        .list(&lp).await.map_err(|_| MojaloopCliError::ClusterConnectionError)? // TODO: test connection error (or whatever might occur here- read the source)
-        .items.get(0).ok_or(MojaloopCliError::CentralLedgerAdminPodNotFound)?.clone();
-    let central_ledger_pod_name = central_ledger_pod.metadata.name.clone().unwrap();
-    let central_ledger_port = central_ledger_pod
-        .spec.ok_or(MojaloopCliError::UnexpectedCentralLedgerPodImplementation)?
-        .containers.iter().find(|c| c.name == container_name).ok_or(MojaloopCliError::CentralLedgerServiceContainerNotFound)?
-        .ports.as_ref().ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?
-        .iter().find(|p| p.name.as_ref().map_or(false, |name| name == port_name)).ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?.clone();
-    println!("Central ledger pod name: {}", central_ledger_pod_name);
-    println!("Central ledger port: {:?}", central_ledger_port);
+    async fn from_params(
+        pods: &Api<Pod>,
+        label: &str,
+        container_name: &str,
+        port: Port,
+    ) -> anyhow::Result<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)> {
+        let lp = ListParams::default().labels(&label);
+        let pod = pods
+            .list(&lp).await.map_err(|e| MojaloopCliError::ClusterConnectionError(e))?
+            .items.get(0).ok_or(MojaloopCliError::CentralLedgerAdminPodNotFound)?.clone();
+        let pod_name = pod.metadata.name.clone().unwrap();
+        let pod_port = pod
+            .spec
+            .ok_or(MojaloopCliError::UnexpectedCentralLedgerPodImplementation)?
+            .containers.iter().find(|c| c.name == container_name)
+            .ok_or(MojaloopCliError::CentralLedgerServiceContainerNotFound)?
+            .ports.as_ref().ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?
+            .iter()
+            .find(|p| {
+                match &port {
+                    Port::Name(port_name) => p.name.as_ref().map_or(false, |name| name == port_name),
+                    Port::Number(port_num) => p.container_port == *port_num,
+                }
+            })
+            .ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?.clone();
+        // Ok((pod_name, port.container_port.try_into().unwrap()))
 
-    let mut pf = pods.portforward(
-        &central_ledger_pod_name,
-        &[central_ledger_port.container_port.try_into().unwrap()]
-    ).await?;
-    let mut ports = pf.ports().unwrap();
-    let port = ports[0].stream().unwrap();
-    Ok(port)
+        let mut pf = pods.portforward(
+            &pod_name,
+            &[pod_port.container_port.try_into().unwrap()]
+        ).await?;
+        let mut ports = pf.ports().unwrap();
+        let result = ports[0].stream().unwrap();
+        Ok(result)
+    }
+
+    pub enum Services {
+        CentralLedger,
+        MlApiAdapter,
+    }
+
+    enum Port {
+        Name(String),
+        Number(i32),
+    }
+
+    pub async fn get(namespace: &Option<String>, services: &[Services]) ->
+        anyhow::Result<Vec<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>>
+    {
+        let client = Client::try_default().await?;
+        let pods: Api<Pod> = match namespace {
+            Some(ns) => Api::namespaced(client, &ns),
+            None => Api::default_namespaced(client),
+        };
+        let mut result = Vec::new();
+
+        for s in services {
+            match s {
+                Services::CentralLedger => result.push(
+                    from_params(
+                        &pods,
+                        "app.kubernetes.io/name=centralledger-service",
+                        "centralledger-service",
+                        Port::Name("http-api".to_string()),
+                    ).await?
+                ),
+                Services::MlApiAdapter => result.push(
+                    from_params(
+                        &pods,
+                        "app.kubernetes.io/name=ml-api-adapter-service",
+                        "ml-api-adapter-service",
+                        Port::Number(3000),
+                    ).await?
+                ),
+            };
+        }
+
+        Ok(result)
+    }
 }
+
 
 async fn send_hyper_request_no_response_body(
     request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
@@ -368,16 +511,32 @@ where
 async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
-    let client = Client::try_default().await?;
-    let central_ledger_conn = get_central_ledger_port_forward(client).await?;
+    let mut port_forwards = port_forward::get(&opts.namespace, &[
+        port_forward::Services::CentralLedger,
+        port_forward::Services::MlApiAdapter,
+    ]).await?;
+    // In reverse order than they were requested
+    let ml_api_adapter_stream = port_forwards.pop().unwrap();
+    let central_ledger_stream = port_forwards.pop().unwrap();
 
-    let (mut request_sender, connection) = Builder::new()
-        .handshake(central_ledger_conn)
+    let (mut ml_api_adapter_request_sender, ml_api_adapter_connection) = Builder::new()
+        .handshake(ml_api_adapter_stream)
         .await?;
 
     // spawn a task to poll the connection and drive the HTTP state
     tokio::spawn(async move {
-        if let Err(e) = connection.await {
+        if let Err(e) = ml_api_adapter_connection.await {
+            eprintln!("Error in connection: {}", e);
+        }
+    });
+
+    let (mut central_ledger_request_sender, central_ledger_connection) = Builder::new()
+        .handshake(central_ledger_stream)
+        .await?;
+
+    // spawn a task to poll the connection and drive the HTTP state
+    tokio::spawn(async move {
+        if let Err(e) = central_ledger_connection.await {
             eprintln!("Error in connection: {}", e);
         }
     });
@@ -397,6 +556,27 @@ async fn main() -> anyhow::Result<()> {
     // The Operations and corresponding functionality could be exported to be used elsewhere.
     // let operations = match opts.subcmd {
     match opts.subcmd {
+        SubCommand::Transfer(transfer_args) => {
+            match transfer_args.subcmd {
+                TransferSubCommand::Prepare(transfer_prepare_args) => {
+                    let transfer_prepare = build_transfer_prepare(
+                        transfer_prepare_args.from,
+                        transfer_prepare_args.to,
+                        transfer_prepare_args.amount,
+                        transfer_prepare_args.currency,
+                    );
+                    let transfer_id = if let FspiopRequestBody::TransferPrepare(body) = &transfer_prepare.body {
+                        body.transfer_id
+                    } else {
+                        panic!();
+                    };
+                    let request = fspiox_api::to_hyper_request(transfer_prepare).unwrap();
+                    send_hyper_request_no_response_body(&mut ml_api_adapter_request_sender, request).await?;
+                    println!("{}", transfer_id);
+                }
+            }
+        }
+
         SubCommand::Hub(hub_args) => {
             match hub_args.subcmd {
                 HubSubCommand::Accounts(hub_accs_args) => {
@@ -425,18 +605,18 @@ async fn main() -> anyhow::Result<()> {
                             match hub_accs_create_args.subcmd {
                                 HubAccountsCreateSubCommand::Rec(hub_accs_create_rec_args) => {
                                     for currency in &hub_accs_create_rec_args.currencies {
-                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubReconciliation).await?;
+                                        create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubReconciliation).await?;
                                     }
                                 }
                                 HubAccountsCreateSubCommand::Sett(hub_accs_create_sett_args) => {
                                     for currency in &hub_accs_create_sett_args.currencies {
-                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                        create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
                                     }
                                 }
                                 HubAccountsCreateSubCommand::All(hub_accs_create_all_args) => {
                                     for currency in &hub_accs_create_all_args.currencies {
-                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubReconciliation).await?;
-                                        create_hub_account(&mut request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                        create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubReconciliation).await?;
+                                        create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
                                     }
                                 }
                             }
@@ -446,7 +626,7 @@ async fn main() -> anyhow::Result<()> {
                             // support newer and older hub names of "hub" and "Hub"? Or just don't
                             // support old hub name? Or just try both?
                             let request = to_hyper_request(GetDfspAccounts { name: "Hub".to_string() })?;
-                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?;
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
                             let table = accounts.iter().map(|a| vec![
                                 a.ledger_account_type.cell(),
                                 a.currency.cell(),
@@ -475,9 +655,15 @@ async fn main() -> anyhow::Result<()> {
             match ps_args.subcmd {
                 ParticipantsSubCommand::List => {
                     let request = to_hyper_request(GetParticipants {})?;
-                    let (_, participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?;
+                    let (_, participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut central_ledger_request_sender, request).await?;
 
-                    // TODO: additional CLI parameters to get more information about participants
+                    // TODO:
+                    // 0. _really_ compress the output here, it's so sparse, making it quite
+                    //    difficult to consume
+                    // 1. additional CLI parameters to get more information about participants
+                    //     -e endpoints
+                    //     -f format
+                    //     -a detailed account info
 
                     for p in participants {
                         println!(
@@ -505,7 +691,7 @@ async fn main() -> anyhow::Result<()> {
             match &p_args.subcmd {
                 ParticipantSubCommand::Create(pc) => {
                     let request = to_hyper_request(GetParticipants {})?;
-                    let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut request_sender, request).await?;
+                    let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut central_ledger_request_sender, request).await?;
 
                     match existing_participants.iter().find(|p| p.name == p_args.name) {
                         Some(existing_participant) => {
@@ -518,7 +704,7 @@ async fn main() -> anyhow::Result<()> {
                                     currency: pc.currency,
                                 },
                             })?;
-                            let (_, post_participants_result) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut request_sender, post_participants_request).await?;
+                            let (_, post_participants_result) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut central_ledger_request_sender, post_participants_request).await?;
                             println!("Post participants result:\n{:?}", post_participants_result);
 
                             let post_initial_position_and_limits_req = to_hyper_request(
@@ -534,7 +720,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                             )?;
-                            let (result, _) = send_hyper_request_no_response_body(&mut request_sender, post_initial_position_and_limits_req).await?;
+                            let (result, _) = send_hyper_request_no_response_body(&mut central_ledger_request_sender, post_initial_position_and_limits_req).await?;
                             println!("Post initial position and limits result:\n{:?}", result.status);
 
                             // TODO: 
@@ -549,7 +735,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                         ParticipantAccountsSubCommand::List => {
                             let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
-                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut request_sender, request).await?;
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
                             // TODO: table
                             println!("{:?}", accounts);
                         }
