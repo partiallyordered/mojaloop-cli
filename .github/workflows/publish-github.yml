@@ -106,6 +106,7 @@ jobs:
             macOS)
                 brew install pkg-config
                 ;;
+        esac
 
     - name: build
       uses: actions-rs/cargo@v1
