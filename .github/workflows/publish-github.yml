@@ -6,6 +6,7 @@ on:
     - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
+  # TODO: delete the release if it fails? Or just hope to notice and do so manually?
   create-release:
     name: Create Github Release
     runs-on: ubuntu-latest
@@ -99,6 +100,9 @@ jobs:
     - name: Install tools and libs
       shell: bash
       # TODO: Do this more like: https://github.com/lotabout/skim/tree/6df015987934bd63121be53d8659da0f44237dac/.github/workflows
+      # In general probably study that other one a bit more. Also:
+      # https://github.com/briansmith/webpki/blob/18cda8a5e32dfc2723930018853a984bd634e667/.github/workflows/ci.yml
+      # in particular the test info on PRs: https://github.com/briansmith/webpki/pull/218#issuecomment-823721570
       run: |
         case $RUNNER_OS in
             Linux)

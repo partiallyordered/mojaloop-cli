@@ -60,6 +60,8 @@ use cli_table::{print_stdout, Cell, Table};
     rename_all = "kebab",
 )]
 struct Opts {
+    // TODO: overall timeout? Probably. Remember how annoying `kubectl wait` is, with its
+    // per-request timeout, meaning that you could wait up to n*timeout to wait for n items.
     /// Per-request timeout. A single command may make multiple requests.
     #[clap(short, long, default_value = "30")]
     timeout: u8,

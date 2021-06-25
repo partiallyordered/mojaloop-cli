@@ -17,6 +17,8 @@ git push --tags
 ```
 
 ### TODO
+- version assertion in GH Actions
+- use nix for building
 - puppet should be able to "hijack" fsps temporarily by
   1. getting their endpoints and storing them locally
   2. modifying their endpoints so that it becomes the endpoint for those fsps
