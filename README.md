@@ -17,6 +17,7 @@ git push --tags
 ```
 
 ### TODO
+- reinstate other platforms in CD
 - version assertion in GH Actions to prevent releasing a version that doesn't correspond with the
     version in Cargo.toml
 - only open port-forward to services actually needed for a given action. I.e. don't open quoting
