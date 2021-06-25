@@ -17,7 +17,10 @@ git push --tags
 ```
 
 ### TODO
-- version assertion in GH Actions
+- version assertion in GH Actions to prevent releasing a version that doesn't correspond with the
+    version in Cargo.toml
+- only open port-forward to services actually needed for a given action. I.e. don't open quoting
+    service port-forward for central ledger actions.
 - use nix for building
 - puppet should be able to "hijack" fsps temporarily by
   1. getting their endpoints and storing them locally

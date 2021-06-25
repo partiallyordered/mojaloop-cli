@@ -24,6 +24,7 @@
 // - settlements
 
 use strum::IntoEnumIterator;
+use strum_macros::Display;
 
 use mojaloop_api::{
     common::{to_hyper_request, Response, MlApiErr},
@@ -91,10 +92,13 @@ struct Opts {
 #[derive(Clap)]
 enum SubCommand {
     /// Create, read, update, and upsert a single switch participant
+    #[clap(alias = "p")]
     Participant(Participant),
     /// Create, read, enable, and disable accounts
+    #[clap(alias = "acc")]
     Accounts(Accounts),
     /// List participants
+    #[clap(alias = "ps")]
     Participants(Participants),
     /// Hub functions
     Hub(Hub),
@@ -111,6 +115,7 @@ enum SubCommand {
     #[clap(alias = "tx")]
     Transfer(Transfer),
     /// Create quotes
+    #[clap(alias = "q")]
     Quote(Quote),
     // /// Complex behaviours and scenarios that require a component deployed to the cluster to
     // /// simulate participants.
@@ -332,9 +337,11 @@ struct HubAccountsCreate {
 #[derive(Clap, Debug)]
 enum HubAccountsCreateSubCommand {
     /// Create multilateral settlement accounts
-    Sett(HubAccountsCreateOpts),
+    #[clap(alias = "sett")]
+    Settlement(HubAccountsCreateOpts),
     /// Create reconciliation accounts
-    Rec(HubAccountsCreateOpts),
+    #[clap(alias = "rec")]
+    Reconciliation(HubAccountsCreateOpts),
     /// Create all hub account types with one command
     All(HubAccountsCreateOpts),
 }
@@ -369,10 +376,13 @@ struct Participant {
 #[derive(Clap)]
 enum ParticipantSubCommand {
     /// Modify participant account
+    #[clap(alias = "acc")]
     Accounts(ParticipantAccount),
     /// Create a participant
+    #[clap(alias = "add")]
     Create(ParticipantCreate),
     /// Modify participant endpoints
+    #[clap(alias = "ep")]
     Endpoints(ParticipantEndpoints),
 }
 
@@ -401,6 +411,7 @@ enum ParticipantEndpointsSetSubCommand {
 
 #[derive(Clap)]
 struct ParticipantEndpointsSetAll {
+    // TODO: require HTTP
     url: url::Url,
 }
 
@@ -489,18 +500,24 @@ struct AccountsCreate {
     currency: Currency,
 }
 
+#[derive(Debug, Display, Clone)]
+pub enum Port {
+    Name(String),
+    Number(i32),
+}
+
 // TODO: crate::Result (i.e. a result type for this crate, that uses this error type as its error
 // type). Probably just call this type "Error"?
 #[derive(Error, Debug)]
 pub enum MojaloopCliError {
-    #[error("Couldn't find central ledger admin pod")]
-    CentralLedgerAdminPodNotFound,
-    #[error("Unexpected central ledger pod manifest implementation")]
-    UnexpectedCentralLedgerPodImplementation,
-    #[error("Central ledger service container not found in pod")]
-    CentralLedgerServiceContainerNotFound,
-    #[error("Ports not present on central ledger service container")]
-    CentralLedgerServicePortNotFound,
+    #[error("Couldn't find pod with label: {0}")]
+    PodNotFound(String),
+    #[error("Unexpected manifest implementation for pod: {0}")]
+    UnexpectedPodImplementation(String),
+    #[error("Service container {0} not found in pod: {1}")]
+    ServiceContainerNotFound(String, String),
+    #[error("Couldn't find port {0} on service container: {1}")]
+    ServicePortNotFound(Port, String),
     #[error("Couldn't retrieve pod list from cluster: {0}")]
     ClusterConnectionError(kube::Error),
     #[error("Failed to send HTTP request to port-forwarded pod: {0}")]
@@ -524,6 +541,11 @@ mod port_forward {
     use crate::MojaloopCliError;
     use std::convert::TryInto;
 
+    // TODO: the presence of Port here probably suggests that many of the top-level errors here
+    // should be in the port_forward module. Or the port_forward module should be flattened into
+    // the file.
+    use crate::Port;
+
     async fn from_params(
         pods: &Api<Pod>,
         label: &str,
@@ -533,14 +555,14 @@ mod port_forward {
         let lp = ListParams::default().labels(&label);
         let pod = pods
             .list(&lp).await.map_err(|e| MojaloopCliError::ClusterConnectionError(e))?
-            .items.get(0).ok_or(MojaloopCliError::CentralLedgerAdminPodNotFound)?.clone();
+            .items.get(0).ok_or(MojaloopCliError::PodNotFound(label.to_string()))?.clone();
         let pod_name = pod.metadata.name.clone().unwrap();
         let pod_port = pod
             .spec
-            .ok_or(MojaloopCliError::UnexpectedCentralLedgerPodImplementation)?
+            .ok_or(MojaloopCliError::UnexpectedPodImplementation(pod_name.clone()))?
             .containers.iter().find(|c| c.name == container_name)
-            .ok_or(MojaloopCliError::CentralLedgerServiceContainerNotFound)?
-            .ports.as_ref().ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?
+            .ok_or(MojaloopCliError::ServiceContainerNotFound(container_name.to_string(), pod_name.clone()))?
+            .ports.as_ref().ok_or(MojaloopCliError::ServicePortNotFound(port.clone(), container_name.to_string()))?
             .iter()
             .find(|p| {
                 match &port {
@@ -548,7 +570,7 @@ mod port_forward {
                     Port::Number(port_num) => p.container_port == *port_num,
                 }
             })
-            .ok_or(MojaloopCliError::CentralLedgerServicePortNotFound)?.clone();
+            .ok_or(MojaloopCliError::ServicePortNotFound(port, container_name.to_string()))?.clone();
         // Ok((pod_name, port.container_port.try_into().unwrap()))
 
         let mut pf = pods.portforward(
@@ -564,11 +586,6 @@ mod port_forward {
         CentralLedger,
         MlApiAdapter,
         QuotingService,
-    }
-
-    enum Port {
-        Name(String),
-        Number(i32),
     }
 
     pub async fn get(namespace: &Option<String>, services: &[Services]) ->
@@ -818,12 +835,12 @@ async fn main() -> anyhow::Result<()> {
                                 Ok(())
                             }
                             match hub_accs_create_args.subcmd {
-                                HubAccountsCreateSubCommand::Rec(hub_accs_create_rec_args) => {
+                                HubAccountsCreateSubCommand::Reconciliation(hub_accs_create_rec_args) => {
                                     for currency in &hub_accs_create_rec_args.currencies {
                                         create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubReconciliation).await?;
                                     }
                                 }
-                                HubAccountsCreateSubCommand::Sett(hub_accs_create_sett_args) => {
+                                HubAccountsCreateSubCommand::Settlement(hub_accs_create_sett_args) => {
                                     for currency in &hub_accs_create_sett_args.currencies {
                                         create_hub_account(&mut central_ledger_request_sender, *currency, HubAccountType::HubMultilateralSettlement).await?;
                                     }
@@ -911,7 +928,10 @@ async fn main() -> anyhow::Result<()> {
                                 name: p_args.name.clone(),
                             })?;
                             let (_, endpoints) = send_hyper_request::<mojaloop_api::central_ledger::participants::CallbackUrls>(&mut central_ledger_request_sender, request).await?;
-                            println!("{:?}", endpoints);
+                            // TODO: table
+                            for ep in endpoints.iter() {
+                                println!("{} {}", ep.r#type, ep.value);
+                            }
                         },
                         ParticipantEndpointsSubCommand::Set(participant_endpoints_set_args) => {
                             match &participant_endpoints_set_args.subcmd {
@@ -922,9 +942,15 @@ async fn main() -> anyhow::Result<()> {
                                         let request = to_hyper_request(PostCallbackUrl {
                                             name: p_args.name.clone(),
                                             callback_type,
+                                            // TODO: strip trailing slash
                                             hostname: url.clone(),
                                         })?;
-                                        send_hyper_request_no_response_body(&mut central_ledger_request_sender, request).await?;
+                                        let (result, _) = send_hyper_request_no_response_body(&mut central_ledger_request_sender, request).await?;
+                                        // TODO: url.clone() is just the hostname the user
+                                        // provided, not the actual endpoint template. This could
+                                        // be confusing. We should show the whole endpoint
+                                        // template.
+                                        println!("Updated {:?} endpoint to {}. Response {}.", callback_type, url.clone(), result.status);
                                     }
                                 }
                             }

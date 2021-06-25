@@ -1,6 +1,6 @@
 [package]
 name = "mojaloop-cli"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["msk- <mattkingston@gmail.com>"]
 edition = "2018"
 
@@ -16,8 +16,8 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-# mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "42e50396cf83541f2269f77b78806d03a6f31ffb", features = ["hyper"] }
-mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "1285893c62358ba43942fa9adf4de7842d687f76", features = ["hyper"] }
+# mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper"] }
 fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "1e324c77adfb17e259346780cd42dfdeb967724b", features = ["fsp_http"] }
 # fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http"] }
 thiserror = "1.0"
@@ -31,3 +31,4 @@ k8s-openapi = { version = "0.11.0", default-features = false, features = ["v1_20
 openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
+strum_macros = "0.21"
