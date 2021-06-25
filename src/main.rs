@@ -23,9 +23,11 @@
 //   - configure endpoints
 // - settlements
 
+use strum::IntoEnumIterator;
+
 use mojaloop_api::{
     common::{to_hyper_request, Response, MlApiErr},
-    central_ledger::participants::{HubAccountType, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant},
+    central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
 };
 use fspiox_api::{
     build_post_quotes, build_transfer_prepare, FspiopRequestBody,
@@ -353,6 +355,7 @@ struct Participants {
 enum ParticipantsSubCommand {
     /// List participants
     List,
+    // TODO: a "describe" that fetches more/better info?
 }
 
 #[derive(Clap)]
@@ -369,6 +372,36 @@ enum ParticipantSubCommand {
     Accounts(ParticipantAccount),
     /// Create a participant
     Create(ParticipantCreate),
+    /// Modify participant endpoints
+    Endpoints(ParticipantEndpoints),
+}
+
+#[derive(Clap)]
+struct ParticipantEndpoints {
+    #[clap(subcommand)]
+    subcmd: ParticipantEndpointsSubCommand,
+}
+
+#[derive(Clap)]
+enum ParticipantEndpointsSubCommand {
+    List,
+    Set(ParticipantEndpointsSet),
+}
+
+#[derive(Clap)]
+struct ParticipantEndpointsSet {
+    #[clap(subcommand)]
+    subcmd: ParticipantEndpointsSetSubCommand,
+}
+
+#[derive(Clap)]
+enum ParticipantEndpointsSetSubCommand {
+    All(ParticipantEndpointsSetAll),
+}
+
+#[derive(Clap)]
+struct ParticipantEndpointsSetAll {
+    url: url::Url,
 }
 
 #[derive(Clap)]
@@ -871,6 +904,33 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Participant(p_args) => {
             match &p_args.subcmd {
+                ParticipantSubCommand::Endpoints(participant_endpoints_args) => {
+                    match &participant_endpoints_args.subcmd {
+                        ParticipantEndpointsSubCommand::List => {
+                            let request = to_hyper_request(GetCallbackUrls {
+                                name: p_args.name.clone(),
+                            })?;
+                            let (_, endpoints) = send_hyper_request::<mojaloop_api::central_ledger::participants::CallbackUrls>(&mut central_ledger_request_sender, request).await?;
+                            println!("{:?}", endpoints);
+                        },
+                        ParticipantEndpointsSubCommand::Set(participant_endpoints_set_args) => {
+                            match &participant_endpoints_set_args.subcmd {
+                                ParticipantEndpointsSetSubCommand::All(participant_endpoints_set_all_args) => {
+                                    // TODO: strip trailing slash
+                                    let url = participant_endpoints_set_all_args.url.to_string();
+                                    for callback_type in FspiopCallbackType::iter() {
+                                        let request = to_hyper_request(PostCallbackUrl {
+                                            name: p_args.name.clone(),
+                                            callback_type,
+                                            hostname: url.clone(),
+                                        })?;
+                                        send_hyper_request_no_response_body(&mut central_ledger_request_sender, request).await?;
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
                 ParticipantSubCommand::Create(pc) => {
                     let request = to_hyper_request(GetParticipants {})?;
                     let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut central_ledger_request_sender, request).await?;
