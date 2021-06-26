@@ -78,6 +78,9 @@ SUBCOMMANDS:
     transfer        Execute transfers
 ```
 
+## Use
+Download for your platform from ![releases](https://github.com/partiallyordered/mojaloop-cli/releases).
+
 ## Build
 ```sh
 cargo b
