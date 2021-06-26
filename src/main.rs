@@ -436,6 +436,8 @@ enum ParticipantAccountsSubCommand {
     Fund(ParticipantAccountFund),
     /// Upsert participant account
     Upsert(ParticipantAccountUpsert),
+    // TODO: only prints active accounts, at present- should have a --inactive flag? Or just print
+    // is_active status?
     /// List participant accounts
     List,
 }
@@ -1005,7 +1007,12 @@ async fn main() -> anyhow::Result<()> {
                             let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
                             let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
                             // TODO: table
-                            println!("{:?}", accounts);
+                            // println!("{:?}", accounts);
+                            for acc in accounts {
+                                if acc.is_active == 1 {
+                                    println!("{} {} {}", acc.currency, acc.ledger_account_type, acc.value);
+                                }
+                            }
                         }
                         ParticipantAccountsSubCommand::Upsert(acc) => {
                             println!("participant account upsert {:?}", acc);

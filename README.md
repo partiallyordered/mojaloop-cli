@@ -1,6 +1,83 @@
 # mojaloop-cli
 Command-line interface to Mojaloop
 
+`mojaloop-cli` connects directly to your cluster to perform the actions requested of it. It'll use
+your current default Kubernetes config- whatever you see when you run `kubectl get pods` is what
+`mojaloop-cli` will see and act on. No ingress and no port forwarding required.
+
+A simple example creating SEK accounts and a participant in a switch. The output is a little rough
+at the time of writing:
+```
+$ mojaloop-cli hub accounts create all NOK SEK
+Created hub reconciliation account: SEK
+Created hub settlement account: SEK
+
+$ mojaloop-cli participant testfspsek create SEK 10000 10000
+Post participants result:
+Participant { name: "testfspsek", id: "http://central-ledger/participants/testfspsek", created: 2021-06-26T16:00:22Z, is_active: 1, accounts: [ParticipantAccount { id: SettlementAccountId(17), ledger_account_type: Position, currency: SEK, is_active: 0 }, ParticipantAccount { id: SettlementAccountId(18), ledger_account_type: Settlement, currency: SEK, is_active: 0 }] }
+Post initial position and limits result:
+201
+
+$ mojaloop-cli participant testfspsek accounts list
+SEK Position 10000
+SEK Settlement 0
+
+$ mojaloop-cli participant testfspsek endpoints set all https://testfspsek.io/
+Updated FspiopCallbackUrlParticipantBatchPut endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlParticipantBatchPutError endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlParticipantPut endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlParticipantPutError endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlPartiesGet endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlPartiesPut endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlPartiesPutError endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlQuotes endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlTransferError endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlTransferPost endpoint to https://testfspsek.io/. Response 201 Created.
+Updated FspiopCallbackUrlTransferPut endpoint to https://testfspsek.io/. Response 201 Created.
+
+$ mojaloop-cli participant testfspsek endpoints list
+FspiopCallbackUrlParticipantBatchPut https://testfspsek.io//participants/{{requestId}}
+FspiopCallbackUrlParticipantBatchPutError https://testfspsek.io//participants/{{requestId}}/error
+FspiopCallbackUrlParticipantPut https://testfspsek.io//participants/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlParticipantPutError https://testfspsek.io//participants/{{partyIdType}}/{{partyIdentifier}}/error
+FspiopCallbackUrlPartiesGet https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlPartiesPut https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlPartiesPutError https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}/error
+FspiopCallbackUrlQuotes https://testfspsek.io/
+FspiopCallbackUrlTransferError https://testfspsek.io//transfers/{{transferId}}/error
+FspiopCallbackUrlTransferPost https://testfspsek.io//transfers
+FspiopCallbackUrlTransferPut https://testfspsek.io//transfers/{{transferId}}
+```
+
+The current help describes functionality; most, though not all of this exists at present:
+```
+Mojaloop CLI 0.2.0
+
+USAGE:
+    mojaloop-cli [FLAGS] [OPTIONS] <SUBCOMMAND>
+
+FLAGS:
+    -h, --help       Prints help information
+    -j, --json       Produce all output as json
+    -V, --version    Prints version information
+
+OPTIONS:
+    -k, --kubeconfig <kubeconfig>    Location of the kubeconfig file to use
+    -n, --namespace <namespace>      Namespace in which to find the Mojaloop deployment. Defaults to
+                                     the default namespace in your kubeconfig, or "default"
+    -t, --timeout <timeout>          Per-request timeout. A single command may make multiple
+                                     requests [default: 30]
+
+SUBCOMMANDS:
+    accounts        Create, read, enable, and disable accounts
+    help            Prints this message or the help of the given subcommand(s)
+    hub             Hub functions
+    participant     Create, read, update, and upsert a single switch participant
+    participants    List participants
+    quote           Create quotes
+    transfer        Execute transfers
+```
+
 ## Build
 ```sh
 cargo b
@@ -17,6 +94,8 @@ git push --tags
 ```
 
 ### TODO
+- simulator creation/configuration?
+- ALS configuration?
 - reinstate other platforms in CD
 - version assertion in GH Actions to prevent releasing a version that doesn't correspond with the
     version in Cargo.toml
