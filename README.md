@@ -3,7 +3,11 @@ Command-line interface to Mojaloop
 
 `mojaloop-cli` connects directly to your cluster to perform the actions requested of it. It'll use
 your current default Kubernetes config- whatever you see when you run `kubectl get pods` is what
-`mojaloop-cli` will see and act on. No ingress and no port forwarding required.
+`mojaloop-cli` will see and act on. No ingress and no port forwarding required. You can specify the
+cluster and namespace:
+1. using `-k` or `--kubeconfig` to supply the Kubernetes config file you'd prefer to use
+2. running `export KUBECONFIG=/path/to/.kube/config` in your terminal before using this tool
+3. using `-n` or `--namespace` to specify the namespace you'd like to target
 
 A simple example creating SEK accounts and a participant in a switch. The output is a little rough
 at the time of writing:
@@ -97,6 +101,10 @@ git push --tags
 ```
 
 ### TODO
+- rename: mojo?
+- a "currency" mode, where the user sets an environment variable and no longer needs to supply
+    currency arguments. This could be handy, because it's not infrequent to operate a switch in a
+    single currency
 - simulator creation/configuration?
 - ALS configuration?
 - reinstate other platforms in CD

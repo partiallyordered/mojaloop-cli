@@ -71,7 +71,7 @@ struct Opts {
 
     /// Location of the kubeconfig file to use
     #[clap(short, long)]
-    kubeconfig: Option<String>,
+    kubeconfig: Option<std::path::PathBuf>,
 
     // TODO: all namespace option? Don't have a reserved "all" argument i.e. --namespace=all,
     // because someone could call their real namespace "all". Probably try to go with common k8s
@@ -532,6 +532,8 @@ pub enum MojaloopCliError {
     PortForwardUnhandledResponse(String),
     #[error("Mojaloop API error: {0}")]
     MojaloopApiError(ErrorResponse),
+    #[error("Couldn't load kubeconfig file: {0}")]
+    UnableToLoadKubeconfig(String),
 }
 
 mod port_forward {
@@ -541,7 +543,7 @@ mod port_forward {
     };
     use k8s_openapi::api::core::v1::Pod;
     use crate::MojaloopCliError;
-    use std::convert::TryInto;
+    use std::convert::{TryFrom, TryInto};
 
     // TODO: the presence of Port here probably suggests that many of the top-level errors here
     // should be in the port_forward module. Or the port_forward module should be flattened into
@@ -590,10 +592,29 @@ mod port_forward {
         QuotingService,
     }
 
-    pub async fn get(namespace: &Option<String>, services: &[Services]) ->
+    pub async fn get(
+        kubeconfig: &Option<std::path::PathBuf>,
+        namespace: &Option<String>,
+        services: &[Services]
+    ) ->
         anyhow::Result<Vec<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>>
     {
-        let client = Client::try_default().await?;
+        let client = match kubeconfig {
+            Some(path) => {
+                let custom_config = kube::config::Kubeconfig::read_from(path.as_path())
+                    .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+                // TODO: expose some of this to the user?
+                let options = kube::config::KubeConfigOptions {
+                    context: None,
+                    cluster: None,
+                    user: None,
+                };
+                let config = kube::Config::from_custom_kubeconfig(custom_config, &options).await
+                    .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+                Client::try_from(config)?
+            },
+            None => Client::try_default().await?
+        };
         let pods: Api<Pod> = match namespace {
             Some(ns) => Api::namespaced(client, &ns),
             None => Api::default_namespaced(client),
@@ -688,11 +709,15 @@ where
 async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
-    let mut port_forwards = port_forward::get(&opts.namespace, &[
-        port_forward::Services::CentralLedger,
-        port_forward::Services::MlApiAdapter,
-        port_forward::Services::QuotingService,
-    ]).await?;
+    let mut port_forwards = port_forward::get(
+        &opts.kubeconfig,
+        &opts.namespace,
+        &[
+            port_forward::Services::CentralLedger,
+            port_forward::Services::MlApiAdapter,
+            port_forward::Services::QuotingService,
+        ]
+    ).await?;
     // In reverse order than they were requested
     let quoting_service_stream = port_forwards.pop().unwrap();
     let ml_api_adapter_stream = port_forwards.pop().unwrap();
