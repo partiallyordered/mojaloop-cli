@@ -436,11 +436,16 @@ struct ParticipantEndpointsSetAll {
 
 #[derive(Clap)]
 struct ParticipantOnboard {
+    /// The currency of the initial account to create for this participant
+    #[clap(required = true)]
     currency: Currency,
+    /// The host to which all FSPIOP requests destined for this participant will be delivered
     #[clap(required = true)]
     url: url::Url,
+    /// The net debit cap for the currency account created with this command
     #[clap(default_value = "0")]
     ndc: u32,
+    /// The initial position of the currency account created with this command
     #[clap(default_value = "0")]
     position: Amount,
 }
