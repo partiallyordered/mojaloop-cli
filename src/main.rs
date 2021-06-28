@@ -120,7 +120,25 @@ enum SubCommand {
     // /// Complex behaviours and scenarios that require a component deployed to the cluster to
     // /// simulate participants.
     // Puppet(Puppet),
+    // /// Onboard a participant
+    // #[clap(alias = "ob")]
+    // Onboard(Onboard),
 }
+
+// #[derive(Clap)]
+// struct Onboard {
+//     #[clap(index = 1, required = true)]
+//     name: FspId,
+//     #[clap(index = 2, required = true)]
+//     currency: Currency,
+//     // TODO: require HTTP
+//     #[clap(index = 3, required = true)]
+//     hostname: url::Url,
+//     #[clap(default_value = "0")]
+//     ndc: u32,
+//     #[clap(default_value = "0")]
+//     position: Amount,
+// }
 
 #[derive(Clap)]
 struct Quote {
@@ -380,10 +398,11 @@ enum ParticipantSubCommand {
     Accounts(ParticipantAccount),
     /// Create a participant
     #[clap(alias = "add")]
-    Create(ParticipantCreate),
+    Onboard(ParticipantOnboard),
     /// Modify participant endpoints
     #[clap(alias = "ep")]
     Endpoints(ParticipantEndpoints),
+    // TODO: there's no option here to _just_ create a participant- we should probably have one
 }
 
 #[derive(Clap)]
@@ -416,11 +435,13 @@ struct ParticipantEndpointsSetAll {
 }
 
 #[derive(Clap)]
-struct ParticipantCreate {
+struct ParticipantOnboard {
     currency: Currency,
-    #[clap(default_value = "10000")]
+    #[clap(required = true)]
+    url: url::Url,
+    #[clap(default_value = "0")]
     ndc: u32,
-    #[clap(default_value = "10000")]
+    #[clap(default_value = "0")]
     position: Amount,
 }
 
@@ -756,6 +777,29 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    async fn set_participant_endpoints(
+        participant_name: &String,
+        url: &String,
+        request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
+    ) -> anyhow::Result<()> {
+        // TODO: strip trailing slash
+        for callback_type in FspiopCallbackType::iter() {
+            let request = to_hyper_request(PostCallbackUrl {
+                name: participant_name.clone(),
+                callback_type,
+                // TODO: strip trailing slash
+                hostname: url.clone(),
+            })?;
+            let (result, _) = send_hyper_request_no_response_body(request_sender, request).await?;
+            // TODO: url.clone() is just the hostname the user
+                // provided, not the actual endpoint template. This could
+                // be confusing. We should show the whole endpoint
+                // template.
+            println!("Updated {:?} endpoint to {}. Response {}.", callback_type, url.clone(), result.status);
+        }
+        Ok(())
+    }
+
     // TODO: collect a list of actions to take, then pass them to a function that takes those
     // actions. This will make a --dry-run option easier. It will also make a declarative format
     // (i.e. "I want this config") easier. Operations could look like this:
@@ -963,28 +1007,17 @@ async fn main() -> anyhow::Result<()> {
                         ParticipantEndpointsSubCommand::Set(participant_endpoints_set_args) => {
                             match &participant_endpoints_set_args.subcmd {
                                 ParticipantEndpointsSetSubCommand::All(participant_endpoints_set_all_args) => {
-                                    // TODO: strip trailing slash
-                                    let url = participant_endpoints_set_all_args.url.to_string();
-                                    for callback_type in FspiopCallbackType::iter() {
-                                        let request = to_hyper_request(PostCallbackUrl {
-                                            name: p_args.name.clone(),
-                                            callback_type,
-                                            // TODO: strip trailing slash
-                                            hostname: url.clone(),
-                                        })?;
-                                        let (result, _) = send_hyper_request_no_response_body(&mut central_ledger_request_sender, request).await?;
-                                        // TODO: url.clone() is just the hostname the user
-                                        // provided, not the actual endpoint template. This could
-                                        // be confusing. We should show the whole endpoint
-                                        // template.
-                                        println!("Updated {:?} endpoint to {}. Response {}.", callback_type, url.clone(), result.status);
-                                    }
+                                    set_participant_endpoints(
+                                        &p_args.name,
+                                        &participant_endpoints_set_all_args.url.to_string(),
+                                        &mut central_ledger_request_sender,
+                                    ).await?;
                                 }
                             }
                         },
                     }
                 }
-                ParticipantSubCommand::Create(pc) => {
+                ParticipantSubCommand::Onboard(participant_create_args) => {
                     let request = to_hyper_request(GetParticipants {})?;
                     let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut central_ledger_request_sender, request).await?;
 
@@ -996,7 +1029,7 @@ async fn main() -> anyhow::Result<()> {
                             let post_participants_request = to_hyper_request(PostParticipant {
                                 participant: NewParticipant {
                                     name: p_args.name.clone(),
-                                    currency: pc.currency,
+                                    currency: participant_create_args.currency,
                                 },
                             })?;
                             let (_, post_participants_result) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participant>(&mut central_ledger_request_sender, post_participants_request).await?;
@@ -1006,20 +1039,23 @@ async fn main() -> anyhow::Result<()> {
                                 PostInitialPositionAndLimits {
                                     name: p_args.name.clone(),
                                     initial_position_and_limits: InitialPositionAndLimits {
-                                        currency: pc.currency,
+                                        currency: participant_create_args.currency,
                                         limit: Limit {
                                             r#type: LimitType::NetDebitCap,
-                                            value: pc.ndc,
+                                            value: participant_create_args.ndc,
                                         },
-                                        initial_position: pc.position,
+                                        initial_position: participant_create_args.position,
                                     }
                                 }
                             )?;
                             let (result, _) = send_hyper_request_no_response_body(&mut central_ledger_request_sender, post_initial_position_and_limits_req).await?;
                             println!("Post initial position and limits result:\n{:?}", result.status);
 
-                            // TODO: 
-
+                            set_participant_endpoints(
+                                &p_args.name,
+                                &participant_create_args.url.to_string(),
+                                &mut central_ledger_request_sender,
+                            ).await?;
                         },
                     }
                 }

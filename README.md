@@ -102,6 +102,10 @@ git push --tags
 
 ### TODO
 - rename: mojo?
+- Allow lower-case currencies? They do "anchor" the commands a little, give them sort of a
+    "reference point", in the same way as an upper-case letter does at the beginning of a
+    sentence. But they're mildly annoying to type in upper-case. Perhaps it's up to the user to
+    "anchor" their commands, or not.
 - a "currency" mode, where the user sets an environment variable and no longer needs to supply
     currency arguments. This could be handy, because it's not infrequent to operate a switch in a
     single currency
