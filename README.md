@@ -12,45 +12,43 @@ cluster and namespace:
 A simple example creating SEK accounts and a participant in a switch. The output is a little rough
 at the time of writing:
 ```
-$ mojaloop-cli hub accounts create all NOK SEK
+$ mojaloop-cli hub accounts create all SEK
 Created hub reconciliation account: SEK
 Created hub settlement account: SEK
 
-$ mojaloop-cli participant testfspsek create SEK 10000 10000
+$ mojaloop-cli participant testfspsek onboard SEK http://testfspsek.io/fspiopapi 10000 10000
 Post participants result:
-Participant { name: "testfspsek", id: "http://central-ledger/participants/testfspsek", created: 2021-06-26T16:00:22Z, is_active: 1, accounts: [ParticipantAccount { id: SettlementAccountId(17), ledger_account_type: Position, currency: SEK, is_active: 0 }, ParticipantAccount { id: SettlementAccountId(18), ledger_account_type: Settlement, currency: SEK, is_active: 0 }] }
+Participant { name: "testfspsek", id: "http://central-ledger/participants/testfspsek", created: 2021-06-28T22:35:36Z, is_active: 1, accounts: [ParticipantAccount { id: SettlementAccountId(23), ledger_account_type: Position, currency: sek, is_active: 0 }, ParticipantAccount { id: SettlementAccountId(24), ledger_account_type: Settlement, currency: sek, is_active: 0 }] }
 Post initial position and limits result:
 201
+Updated FspiopCallbackUrlParticipantBatchPut endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlParticipantBatchPutError endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlParticipantPut endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlParticipantPutError endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlPartiesGet endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlPartiesPut endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlPartiesPutError endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlQuotes endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlTransferError endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlTransferPost endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
+Updated FspiopCallbackUrlTransferPut endpoint to http://testfsksek.io/fspiopapi. Response 201 Created.
 
 $ mojaloop-cli participant testfspsek accounts list
 SEK Position 10000
 SEK Settlement 0
 
-$ mojaloop-cli participant testfspsek endpoints set all https://testfspsek.io/
-Updated FspiopCallbackUrlParticipantBatchPut endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlParticipantBatchPutError endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlParticipantPut endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlParticipantPutError endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlPartiesGet endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlPartiesPut endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlPartiesPutError endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlQuotes endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlTransferError endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlTransferPost endpoint to https://testfspsek.io/. Response 201 Created.
-Updated FspiopCallbackUrlTransferPut endpoint to https://testfspsek.io/. Response 201 Created.
-
 $ mojaloop-cli participant testfspsek endpoints list
-FspiopCallbackUrlParticipantBatchPut https://testfspsek.io//participants/{{requestId}}
-FspiopCallbackUrlParticipantBatchPutError https://testfspsek.io//participants/{{requestId}}/error
-FspiopCallbackUrlParticipantPut https://testfspsek.io//participants/{{partyIdType}}/{{partyIdentifier}}
-FspiopCallbackUrlParticipantPutError https://testfspsek.io//participants/{{partyIdType}}/{{partyIdentifier}}/error
-FspiopCallbackUrlPartiesGet https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}
-FspiopCallbackUrlPartiesPut https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}
-FspiopCallbackUrlPartiesPutError https://testfspsek.io//parties/{{partyIdType}}/{{partyIdentifier}}/error
-FspiopCallbackUrlQuotes https://testfspsek.io/
-FspiopCallbackUrlTransferError https://testfspsek.io//transfers/{{transferId}}/error
-FspiopCallbackUrlTransferPost https://testfspsek.io//transfers
-FspiopCallbackUrlTransferPut https://testfspsek.io//transfers/{{transferId}}
+FspiopCallbackUrlParticipantBatchPut http://testfspsek.io/participants/{{requestId}}
+FspiopCallbackUrlParticipantBatchPutError http://testfspsek.io/participants/{{requestId}}/error
+FspiopCallbackUrlParticipantPut http://testfspsek.io/participants/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlParticipantPutError http://testfspsek.io/participants/{{partyIdType}}/{{partyIdentifier}}/error
+FspiopCallbackUrlPartiesGet http://testfspsek.io/parties/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlPartiesPut http://testfspsek.io/parties/{{partyIdType}}/{{partyIdentifier}}
+FspiopCallbackUrlPartiesPutError http://testfspsek.io/parties/{{partyIdType}}/{{partyIdentifier}}/error
+FspiopCallbackUrlQuotes http://testfspsek.io/
+FspiopCallbackUrlTransferError http://testfspsek.io/transfers/{{transferId}}/error
+FspiopCallbackUrlTransferPost http://testfspsek.io/transfers
+FspiopCallbackUrlTransferPut http://testfspsek.io/transfers/{{transferId}}
 ```
 
 The current help describes functionality; most, though not all of this exists at present:
