@@ -98,8 +98,33 @@ git tag vX.Y.Z # replace X, Y, Z with something appropriate, preferably the vers
 git push --tags
 ```
 
+## Why Rust?
+- The language: this project builds on other projects that aim to create Mojaloop and FSPIOP API
+    implementations that enable usage that is correct by construction.
+- The ecosystem:
+  - Distribution and usage of an AOT compiled, statically linked binary is superior to a language
+      that requires a scripting runtime and garbage collector.
+  - The breadth and quality of dependencies available is greater than (some, all?) other such
+      languages.
+  - Dependency management in Rust is superior to some other such languages.
+
+In sum, in the author's opinion, Rust and its ecosystem hits the sweet spot between
+maintainability, development velocity, and tooling.
+
 ### TODO
 - rename: mojo?
+- create a json input format (which might be similar to the output of dry-run?) such that users can
+    supply a file like
+    ```json
+    [
+      { "participant": { "name": "testfspmmk", "onboard": { "currency":  "MMK", "url": "http://testfspmmk.io/fspiopapi", "ndc": 10000, "position": 10000 } } },
+      { "participant": { "name": "testfspmmk", "onboard": { "currency":  "MMK", "url": "http://testfspmmk.io/fspiopapi", "ndc": 10000, "position": 10000 } } }
+    ]
+    ```
+    and have the actions taken. This might be possible by separating the CLI into an "assess" and
+    an "act" stage, and making this the input to the "act" stage. Or it might be better to have
+    that be a programmatic interface, and have the input above just be a config file that goes into
+    clap.
 - Allow lower-case currencies? They do "anchor" the commands a little, give them sort of a
     "reference point", in the same way as an upper-case letter does at the beginning of a
     sentence. But they're mildly annoying to type in upper-case. Perhaps it's up to the user to
