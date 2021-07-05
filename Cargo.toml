@@ -32,3 +32,6 @@ openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
 strum_macros = "0.21"
+voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "351efeb1e9b98e5dc8113d38d43ec2fd59992691" }
+# voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
+tokio-tungstenite = "0.14"

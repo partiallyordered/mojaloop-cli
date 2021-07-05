@@ -27,14 +27,13 @@ use strum::IntoEnumIterator;
 use strum_macros::Display;
 
 use mojaloop_api::{
-    common::{to_hyper_request, Response, MlApiErr},
+    common::to_hyper_request,
     central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
 };
 use fspiox_api::{
     build_post_quotes, build_transfer_prepare, FspiopRequestBody,
     common::{Amount, Currency, FspId, ErrorResponse, CorrelationId},
     transfer,
-    quote,
 };
 
 extern crate clap;
@@ -46,14 +45,15 @@ use thiserror::Error;
 use hyper::http::{Request, StatusCode};
 use hyper::{client::conn::Builder, Body};
 
+use k8s_openapi::api::core::v1::Pod;
 use kube::{
     api::{Api, DeleteParams, ListParams, PostParams, WatchEvent},
     Client, ResourceExt,
 };
 
-use tokio::io::AsyncWriteExt;
-
 use cli_table::{print_stdout, Cell, Table};
+
+use std::convert::TryFrom;
 
 #[derive(Clap)]
 #[clap(
@@ -117,9 +117,9 @@ enum SubCommand {
     /// Create quotes
     #[clap(alias = "q")]
     Quote(Quote),
-    // /// Complex behaviours and scenarios that require a component deployed to the cluster to
-    // /// simulate participants.
-    // Puppet(Puppet),
+    /// Complex behaviours and scenarios that require a component deployed to the cluster to
+    /// simulate participants.
+    Voodoo(Voodoo),
     // /// Onboard a participant
     // #[clap(alias = "ob")]
     // Onboard(Onboard),
@@ -166,7 +166,7 @@ struct QuoteCreate {
 }
 
 #[derive(Clap)]
-struct Puppet {
+struct Voodoo {
     #[clap(short,long)]
     /// Create any participants, accounts etc. required by this command where they do not exist.
     ///
@@ -191,11 +191,11 @@ struct Puppet {
     #[clap(short,long)]
     hijack: bool,
     #[clap(subcommand)]
-    subcmd: PuppetSubCommand,
+    subcmd: VoodooSubCommand,
 }
 
 #[derive(Clap)]
-enum PuppetSubCommand {
+enum VoodooSubCommand {
     Transfer(PuppetTransfer),
 }
 
@@ -562,21 +562,48 @@ pub enum MojaloopCliError {
     UnableToLoadKubeconfig(String),
 }
 
-mod port_forward {
-    use kube::{
-        api::{Api, ListParams},
-        Client,
+async fn get_pods(
+    kubeconfig: &Option<std::path::PathBuf>,
+    namespace: &Option<String>,
+) -> Result<Api<Pod>, MojaloopCliError> {
+    let client = match kubeconfig {
+        Some(path) => {
+            let custom_config = kube::config::Kubeconfig::read_from(path.as_path())
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+            // TODO: expose some of this to the user?
+            let options = kube::config::KubeConfigOptions {
+                context: None,
+                cluster: None,
+                user: None,
+            };
+            let config = kube::Config::from_custom_kubeconfig(custom_config, &options).await
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+            Client::try_from(config)
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?
+        },
+        None => Client::try_default().await
+            .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?
     };
+    Ok(
+        match namespace {
+            Some(ns) => Api::namespaced(client, &ns),
+            None => Api::default_namespaced(client),
+        }
+    )
+}
+
+mod port_forward {
+    use kube::api::{Api, ListParams};
     use k8s_openapi::api::core::v1::Pod;
     use crate::MojaloopCliError;
-    use std::convert::{TryFrom, TryInto};
+    use std::convert::TryInto;
 
     // TODO: the presence of Port here probably suggests that many of the top-level errors here
     // should be in the port_forward module. Or the port_forward module should be flattened into
     // the file.
     use crate::Port;
 
-    async fn from_params(
+    pub async fn from_params(
         pods: &Api<Pod>,
         label: &str,
         container_name: &str,
@@ -619,39 +646,18 @@ mod port_forward {
     }
 
     pub async fn get(
-        kubeconfig: &Option<std::path::PathBuf>,
-        namespace: &Option<String>,
+        pods: &Api<Pod>,
         services: &[Services]
     ) ->
         anyhow::Result<Vec<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>>
     {
-        let client = match kubeconfig {
-            Some(path) => {
-                let custom_config = kube::config::Kubeconfig::read_from(path.as_path())
-                    .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
-                // TODO: expose some of this to the user?
-                let options = kube::config::KubeConfigOptions {
-                    context: None,
-                    cluster: None,
-                    user: None,
-                };
-                let config = kube::Config::from_custom_kubeconfig(custom_config, &options).await
-                    .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
-                Client::try_from(config)?
-            },
-            None => Client::try_default().await?
-        };
-        let pods: Api<Pod> = match namespace {
-            Some(ns) => Api::namespaced(client, &ns),
-            None => Api::default_namespaced(client),
-        };
         let mut result = Vec::new();
 
         for s in services {
             match s {
                 Services::QuotingService => result.push(
                     from_params(
-                        &pods,
+                        pods,
                         "app.kubernetes.io/name=quoting-service",
                         "quoting-service",
                         Port::Name("http-api".to_string()),
@@ -659,7 +665,7 @@ mod port_forward {
                 ),
                 Services::CentralLedger => result.push(
                     from_params(
-                        &pods,
+                        pods,
                         "app.kubernetes.io/name=centralledger-service",
                         "centralledger-service",
                         Port::Name("http-api".to_string()),
@@ -667,7 +673,7 @@ mod port_forward {
                 ),
                 Services::MlApiAdapter => result.push(
                     from_params(
-                        &pods,
+                        pods,
                         "app.kubernetes.io/name=ml-api-adapter-service",
                         "ml-api-adapter-service",
                         Port::Number(3000),
@@ -735,9 +741,13 @@ where
 async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
 
-    let mut port_forwards = port_forward::get(
+    let pods = get_pods(
         &opts.kubeconfig,
         &opts.namespace,
+    ).await?;
+
+    let mut port_forwards = port_forward::get(
+        &pods,
         &[
             port_forward::Services::CentralLedger,
             port_forward::Services::MlApiAdapter,
@@ -1105,6 +1115,99 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+
+        SubCommand::Voodoo(voodoo_args) => {
+            use voodoo_doll;
+            use futures_util::StreamExt;
+            use tokio_tungstenite::{client_async, tungstenite::protocol::Message};
+            use futures::SinkExt;
+
+            let p: Pod = voodoo_doll::pod().unwrap();
+
+            // TODO: here we fail if the pod exists or is being created/deleted- need to handle
+            // this better.
+            pods.create(
+                &kube::api::PostParams::default(),
+                &p,
+            ).await?;
+
+            // Wait until the pod is running
+            let pod_name = p.metadata.name.unwrap();
+            let lp = ListParams::default()
+                .fields(format!("metadata.name={}", &pod_name).as_str())
+                .timeout(30);
+            let mut stream = pods.watch(&lp, "0").await?.boxed();
+            while let Some(status) = stream.try_next().await? {
+                match status {
+                    WatchEvent::Added(o) => {
+                        println!("Added {}", o.name());
+                    }
+                    WatchEvent::Modified(o) => {
+                        let s = o.status.as_ref().expect("status exists on pod");
+                        if s.phase.clone().unwrap_or_default() == "Running" {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let voodoo_doll_stream = port_forward::from_params(
+                &pods,
+                // TODO: we sort of can't really know how the pod is going to be identified,
+                // therefore this information should be exposed by the voodoo-doll lib, one way or
+                // another.
+                p.metadata.labels.unwrap().get("app.kubernetes.io/name").unwrap(),
+                &p.spec.unwrap().containers[0].name,
+                Port::Number(3030),
+            ).await?;
+
+            let (ws_stream, _) = client_async("/voodoo", voodoo_doll_stream).await?;
+
+            let (mut voodoo_write, mut voodoo_read) = ws_stream.split();
+
+            voodoo_write.send(Message::Text("hello!".to_string())).await?;
+
+            while let Some(msg) = voodoo_read.next().await {
+                let msg = msg?;
+                if !msg.is_text() {
+                    println!("Incoming non-text:");
+                }
+                println!("{}", msg);
+            }
+
+            pods.delete(&pod_name, &DeleteParams::default()).await?;
+
+            // voodoo_write
+
+            // TODO: check for an existing voodoo doll in the cluster
+            //
+            // 1. Create a voodoo doll in the cluster (the lib should export a pod manifest that
+            //    can be used to create it- or maybe one better, a function that takes a k8s client
+            //    and returns a created pod?). The voodoo doll needs to have some manner of health
+            //    endpoint, and the manifest needs to use that to check it's healthy, so that we
+            //    can use k8s functionality to be confident it's ready. Moreover, if it is
+            //    responsible for itself, then users of the library need not worry about
+            //    versioning, etc. (So TODO: what will voodoo doll do about versioning....?).
+            //
+            //    An example of creating a pod can be found here:
+            //    https://github.com/kazk/kube-rs/pull/4/files
+            //
+            // 2. open a websocket to the voodoo doll
+            //
+            // 3. send our messsage
+            //
+            // 4. wait for a reply
+            //
+            // 5. kill the voodoo doll
+            //
+            // TODO: can the voodoo doll have some sort of self-destruct feature, whereby after
+            // some duration with no connections it will kill itself? This way, we can leave it in
+            // place. Leaving it in place is advantageous, because when the pod is deleted, it
+            // takes some time to go away, so if we want to perform some more voodoo (issue another
+            // command to it), we will have to wait until it's deleted, then recreate it. This will
+            // quickly become annoying.
+        }
     }
 
     Ok(())
