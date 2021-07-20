@@ -113,6 +113,16 @@ maintainability, development velocity, and tooling.
 
 ### TODO
 - rename: mojo?
+- A repl? It may be better to expose an API to an existing language, such as Lua or Python, and
+    use its repl. Preferably one with autocomplete. Although `rustyline` below looks like it has
+    the features we'd be interested in.
+    - https://github.com/kkawakam/rustyline#similar-projects
+    - https://crates.io/crates/rustyline
+    - https://github.com/hoelzro/lua-repl/
+    - https://old.reddit.com/r/rust/comments/b1t6da/what_crates_should_i_use_to_make_a_repl/
+- It _might_ be possible to embed the voodoo-doll docker image in this binary, then somehow deploy
+    it into the cluster (put up our own image registry proxy? inject it into the cluster's image
+    registry, as Skaffold does (see how it achieves this)?)
 - create a json input format (which might be similar to the output of dry-run?) such that users can
     supply a file like
     ```json

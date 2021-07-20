@@ -29,6 +29,8 @@ use strum_macros::Display;
 use mojaloop_api::{
     common::to_hyper_request,
     central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
+    central_ledger::settlement_models,
+    central_ledger::participants,
 };
 use fspiox_api::{
     build_post_quotes, build_transfer_prepare, FspiopRequestBody,
@@ -159,7 +161,7 @@ struct QuoteCreate {
     #[clap(index = 2, required = true)]
     to: FspId,
     #[clap(index = 3, required = true)]
-    currency: Currency,
+    currency: fspiox_api::common::Currency,
     // TODO: take multiple
     #[clap(index = 4, required = true)]
     amount: Amount,
@@ -167,52 +169,48 @@ struct QuoteCreate {
 
 #[derive(Clap)]
 struct Voodoo {
-    #[clap(short,long)]
-    /// Create any participants, accounts etc. required by this command where they do not exist.
-    ///
-    /// If participants used by this command do exist, this utility will exit with an error before
-    /// taking any action. To use existing participants, if they exist, and create them if they do
-    /// not exist, combine this flag with the --hijack flag.
-    create: bool,
-    /// Disable participants and accounts created by this command.
-    #[clap(short,long)]
-    cleanup_created: bool,
-    /// Disable any participants and accounts used by this command once the command has been executed
-    ///
-    /// Disable participants and accounts used by this command. Warning: this will disable
-    /// participants and accounts that existed _before_ this command was called.
-    #[clap(short,long)]
-    cleanup: bool,
-    /// Take control of any participants specified in this command
-    ///
-    /// This will temporarily reroute all endpoints for any participants used in this command to
-    /// puppeteer. This means the entity normally configured to receive FSPIOP requests at these
-    /// endpoints will not receive them. Endpoints will be restored after the command completes.
-    #[clap(short,long)]
-    hijack: bool,
+    // TODO: evaluate, uncomment:
+    // #[clap(short,long)]
+    // /// Create any participants, accounts etc. required by this command where they do not exist.
+    // ///
+    // /// If participants used by this command do exist, this utility will exit with an error before
+    // /// taking any action. To use existing participants, if they exist, and create them if they do
+    // /// not exist, combine this flag with the --hijack flag.
+    // create: bool,
+    // /// Disable participants and accounts created by this command.
+    // #[clap(short,long)]
+    // cleanup_created: bool,
+    // /// Disable any participants and accounts used by this command once the command has been executed
+    // ///
+    // /// Disable participants and accounts used by this command. Warning: this will disable
+    // /// participants and accounts that existed _before_ this command was called.
+    // #[clap(short,long)]
+    // cleanup: bool,
+    // /// Take control of any participants specified in this command
+    // ///
+    // /// This will temporarily reroute all endpoints for any participants used in this command to
+    // /// puppeteer. This means the entity normally configured to receive FSPIOP requests at these
+    // /// endpoints will not receive them. Endpoints will be restored after the command completes.
+    // #[clap(short,long)]
+    // hijack: bool,
     #[clap(subcommand)]
     subcmd: VoodooSubCommand,
 }
 
 #[derive(Clap)]
 enum VoodooSubCommand {
+    /// Perform an end-to-end transfer, without a quote
     Transfer(PuppetTransfer),
 }
 
 #[derive(Clap)]
 struct PuppetTransfer {
-    #[clap(subcommand)]
-    subcmd: PuppetTransferSubCommand,
+    payer: FspId,
+    payee: FspId,
+    currency: fspiox_api::common::Currency,
+    amount: Amount,
+    transfer_id: Option<transfer::TransferId>,
 }
-
-#[derive(Clap)]
-enum PuppetTransferSubCommand {
-    /// Create a transfer from an existing quote
-    FromQuote(PuppetTransferFromQuote),
-}
-
-#[derive(Clap)]
-struct PuppetTransferFromQuote {}
 
 #[derive(Clap)]
 struct Transfer {
@@ -270,7 +268,7 @@ struct TransferPrepareWithId {
     #[clap(index = 2, required = true)]
     to: FspId,
     #[clap(index = 3, required = true)]
-    currency: Currency,
+    currency: fspiox_api::common::Currency,
     // TODO: it might be possible to put these under flags or a subcommand or similar to allow
     // multiple. I.e. we might be able to say
     //   mojaloop-cli transfer prepare from-transaction payerfsp payeefsp XOF \
@@ -328,13 +326,47 @@ struct Hub {
 #[derive(Clap)]
 enum HubSubCommand {
     /// Create and read hub accounts
-    Accounts(HubAccounts)
+    Accounts(HubAccounts),
+    /// Create settlement models
+    SettlementModel(SettlementModel),
 }
 
 #[derive(Clap)]
 struct HubAccounts {
     #[clap(subcommand)]
     subcmd: HubAccountsSubCommand,
+}
+
+#[derive(Clap)]
+struct SettlementModel {
+    #[clap(subcommand)]
+    subcmd: SettlementModelSubCommand,
+}
+
+#[derive(Clap)]
+enum SettlementModelSubCommand {
+    Create(SettlementModelCreate),
+}
+
+#[derive(Clap)]
+struct SettlementModelCreate {
+    currency: fspiox_api::common::Currency,
+    #[clap(short, long, default_value = "DEFERREDNET")]
+    name: String,
+    #[clap(short, long, parse(try_from_str), default_value = "true")]
+    auto_position_reset: bool,
+    #[clap(short, long, default_value = "position")]
+    ledger_account_type: settlement_models::LedgerAccountType,
+    #[clap(short = 't', long, default_value = "settlement")]
+    settlement_account_type: settlement_models::SettlementAccountType,
+    #[clap(short, long, parse(try_from_str), default_value = "true")]
+    require_liquidity_check: bool,
+    #[clap(short = 'd', long, default_value = "deferred")]
+    settlement_delay: settlement_models::SettlementDelay,
+    #[clap(short = 'g', long, default_value = "net")]
+    settlement_granularity: settlement_models::SettlementGranularity,
+    #[clap(short = 'i', long, default_value = "multilateral")]
+    settlement_interchange: settlement_models::SettlementInterchange,
 }
 
 #[derive(Clap)]
@@ -402,7 +434,30 @@ enum ParticipantSubCommand {
     /// Modify participant endpoints
     #[clap(alias = "ep")]
     Endpoints(ParticipantEndpoints),
+    #[clap(alias = "lim")]
+    /// Manage participant NDC
+    Limits(ParticipantLimits),
     // TODO: there's no option here to _just_ create a participant- we should probably have one
+}
+
+#[derive(Clap)]
+struct ParticipantLimits {
+    #[clap(subcommand)]
+    subcmd: ParticipantLimitsSubCommand,
+}
+
+#[derive(Clap)]
+enum ParticipantLimitsSubCommand {
+    // TODO: List(ParticipantLimitsGet),
+    // TODO: is it possible to chain these, i.e. set MMD 10000 set XOF 10000 set EUR 5000 etc.?
+    /// Set participant NDC
+    Set(ParticipantLimitsSet),
+}
+
+#[derive(Clap)]
+struct ParticipantLimitsSet {
+    currency: Currency,
+    value: u32,
 }
 
 #[derive(Clap)]
@@ -442,9 +497,13 @@ struct ParticipantOnboard {
     /// The host to which all FSPIOP requests destined for this participant will be delivered
     #[clap(required = true)]
     url: url::Url,
+    // TODO: Accept numbers with commas, perhaps scientific notation, perhaps the 1M 1MM etc.
+    // notation. Or 10K 10M 100M etc.
     /// The net debit cap for the currency account created with this command
     #[clap(default_value = "0")]
     ndc: u32,
+    // TODO: Accept numbers with commas, perhaps scientific notation, perhaps the 1M 1MM etc.
+    // notation. Or 10K 10M 100M etc.
     /// The initial position of the currency account created with this command
     #[clap(default_value = "0")]
     position: Amount,
@@ -560,6 +619,9 @@ pub enum MojaloopCliError {
     MojaloopApiError(ErrorResponse),
     #[error("Couldn't load kubeconfig file: {0}")]
     UnableToLoadKubeconfig(String),
+    // TODO: tell the user what command to execute to create such an account?
+    #[error("Participant {0} does not have {1} settlement account")]
+    ParticipantMissingCurrencyAccount(FspId, Currency),
 }
 
 async fn get_pods(
@@ -715,7 +777,6 @@ async fn send_hyper_request_no_response_body(
 async fn send_hyper_request<Resp>(
     request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
     req: hyper::Request<hyper::body::Body>
-// ) -> Result<(<hyper::Response<hyper::body::Body> as Trait>::Parts, Resp), MojaloopCliError>
 ) -> Result<(http::response::Parts, Resp), MojaloopCliError>
 where
     Resp: serde::de::DeserializeOwned,
@@ -897,6 +958,28 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Hub(hub_args) => {
             match hub_args.subcmd {
+                HubSubCommand::SettlementModel(hub_settlement_model_args) => {
+                    match hub_settlement_model_args.subcmd {
+                        SettlementModelSubCommand::Create(hub_settlement_model_create_args) => {
+                            let request = to_hyper_request(settlement_models::PostSettlementModel {
+                                settlement_model: settlement_models::SettlementModel {
+                                    auto_position_reset: hub_settlement_model_create_args.auto_position_reset,
+                                    ledger_account_type: hub_settlement_model_create_args.ledger_account_type,
+                                    settlement_account_type: hub_settlement_model_create_args.settlement_account_type,
+                                    name: hub_settlement_model_create_args.name.clone(),
+                                    require_liquidity_check: hub_settlement_model_create_args.require_liquidity_check,
+                                    settlement_delay: hub_settlement_model_create_args.settlement_delay,
+                                    settlement_granularity: hub_settlement_model_create_args.settlement_granularity,
+                                    settlement_interchange: hub_settlement_model_create_args.settlement_interchange,
+                                    currency: hub_settlement_model_create_args.currency,
+                                }
+                            }).unwrap();
+                            send_hyper_request_no_response_body(&mut central_ledger_request_sender, request).await?;
+                            println!("Created settlement model: {}", hub_settlement_model_create_args.name);
+                            // Ok(())
+                        }
+                    }
+                }
                 HubSubCommand::Accounts(hub_accs_args) => {
                     match hub_accs_args.subcmd {
                         HubAccountsSubCommand::Create(hub_accs_create_args) => {
@@ -1007,6 +1090,34 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Participant(p_args) => {
             match &p_args.subcmd {
+                ParticipantSubCommand::Limits(participant_limits_args) => {
+                    match &participant_limits_args.subcmd {
+                        ParticipantLimitsSubCommand::Set(participant_limits_set_args) => {
+                            let request = to_hyper_request(participants::PutParticipantLimit {
+                                name: p_args.name.clone(),
+                                limit: participants::NewParticipantLimit {
+                                    currency: participant_limits_set_args.currency,
+                                    limit: participants::ParticipantLimit {
+                                        value: participant_limits_set_args.value,
+                                        r#type: participants::LimitType::NetDebitCap,
+                                        alarm_percentage: 10, // TODO: expose this to the user?
+                                    }
+                                }
+                            })?;
+                            let (result, _) = send_hyper_request_no_response_body(
+                                &mut central_ledger_request_sender,
+                                request,
+                            ).await?;
+                            println!(
+                                "Update {} {} limit to {} result:\n{:?}",
+                                p_args.name,
+                                participant_limits_set_args.currency,
+                                participant_limits_set_args.value,
+                                result.status
+                            );
+                        }
+                    }
+                }
                 ParticipantSubCommand::Endpoints(participant_endpoints_args) => {
                     match &participant_endpoints_args.subcmd {
                         ParticipantEndpointsSubCommand::List => {
@@ -1032,6 +1143,7 @@ async fn main() -> anyhow::Result<()> {
                         },
                     }
                 }
+
                 ParticipantSubCommand::Onboard(participant_create_args) => {
                     let request = to_hyper_request(GetParticipants {})?;
                     let (_, existing_participants) = send_hyper_request::<mojaloop_api::central_ledger::participants::Participants>(&mut central_ledger_request_sender, request).await?;
@@ -1074,10 +1186,57 @@ async fn main() -> anyhow::Result<()> {
                         },
                     }
                 }
+
                 ParticipantSubCommand::Accounts(pa) => {
                     match &pa.subcmd {
                         ParticipantAccountsSubCommand::Fund(part_acc_fund_args) => {
-                            println!("part_acc_fund_args {:?}", part_acc_fund_args);
+                            let get_accounts = to_hyper_request(participants::GetDfspAccounts{
+                                name: p_args.name.clone(),
+                            }).unwrap();
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(
+                                &mut central_ledger_request_sender, get_accounts).await?;
+                            // TODO: provide helpful error messages.
+                            let account = accounts
+                                .iter()
+                                .find(|acc|
+                                    acc.ledger_account_type == participants::AnyAccountType::Settlement &&
+                                    acc.currency == part_acc_fund_args.currency,
+                                )
+                                .map(Ok)
+                                .unwrap_or(Err(MojaloopCliError::ParticipantMissingCurrencyAccount(
+                                            p_args.name.clone(), part_acc_fund_args.currency)))?;
+                            match &part_acc_fund_args.subcmd {
+                                ParticipantAccountFundSubCommand::In(part_acc_fund_in_args) => { println!("Not yet implemented") },
+                                ParticipantAccountFundSubCommand::Out(part_acc_fund_out_args) => { println!("Not yet implemented") },
+                                ParticipantAccountFundSubCommand::Num(part_acc_fund_num_args) => {
+                                    let action = if part_acc_fund_num_args.amount > Amount::ZERO {
+                                        participants::ParticipantFundsInOutAction::RecordFundsIn
+                                    } else {
+                                        participants::ParticipantFundsInOutAction::RecordFundsOutPrepareReserve
+                                    };
+                                    let funds_request = to_hyper_request(
+                                        participants::PostParticipantSettlementFunds {
+                                            name: p_args.name,
+                                            account_id: account.id,
+                                            funds: participants::ParticipantFundsInOut {
+                                                transfer_id: fspiox_api::common::CorrelationId::new(),
+                                                action,
+                                                amount: fspiox_api::common::Money {
+                                                    currency: part_acc_fund_args.currency,
+                                                    amount: part_acc_fund_num_args.amount.abs()
+                                                },
+                                                reason: "Voodoo".to_string(),
+                                                external_reference: "Voodoo".to_string(),
+                                            }
+                                        }
+                                    )?;
+                                    let (result, _) = send_hyper_request_no_response_body(
+                                        &mut central_ledger_request_sender,
+                                        funds_request,
+                                    ).await?;
+                                    println!("Funds in result:\n{:?}", result.status);
+                                }
+                            }
                         }
                         ParticipantAccountsSubCommand::List => {
                             let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
@@ -1091,7 +1250,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         ParticipantAccountsSubCommand::Upsert(acc) => {
-                            println!("participant account upsert {:?}", acc);
+                            println!("Not yet implemented");
                             // 1. get participant, make an error if it doesn't exist
                             // 2. get existing accounts
                             // 3. check what was requested, compare with what we have
@@ -1152,28 +1311,60 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
+            let pod_label_key = "app.kubernetes.io/name";
+            let pod_label = format!(
+                "{}={}",
+                pod_label_key,
+                p.metadata.labels.unwrap().get(pod_label_key).unwrap(),
+            );
+
             let voodoo_doll_stream = port_forward::from_params(
                 &pods,
                 // TODO: we sort of can't really know how the pod is going to be identified,
                 // therefore this information should be exposed by the voodoo-doll lib, one way or
-                // another.
-                p.metadata.labels.unwrap().get("app.kubernetes.io/name").unwrap(),
+                // another. Perhaps voodoo-doll lib should have a function that accepts a pod list
+                // (our &pods above) and returns the correct pod, if it is present. And creates it,
+                // if not?
+                &pod_label,
                 &p.spec.unwrap().containers[0].name,
                 Port::Number(3030),
             ).await?;
 
-            let (ws_stream, _) = client_async("/voodoo", voodoo_doll_stream).await?;
+            // TODO: we sort of can't really know what endpoint to call, therefore this information
+            // should be exposed by the voodoo-doll lib, one way or another.
+            // let uri = "/voodoo".parse::<http::Uri>().unwrap();
+            let (ws_stream, _) = client_async("ws://host.ignored/voodoo", voodoo_doll_stream).await?;
 
             let (mut voodoo_write, mut voodoo_read) = ws_stream.split();
 
-            voodoo_write.send(Message::Text("hello!".to_string())).await?;
+            match voodoo_args.subcmd {
+                VoodooSubCommand::Transfer(voodoo_transfer_args) => {
+                    let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
+                        transfer::TransferId(fspiox_api::common::CorrelationId::new()));
+                    voodoo_write.send(
+                        Message::Text(
+                            serde_json::to_string(
+                                &voodoo_doll::protocol::ClientMessage::Transfer(
+                                    voodoo_doll::protocol::TransferMessage {
+                                        msg_sender: voodoo_transfer_args.payer,
+                                        msg_recipient: voodoo_transfer_args.payee,
+                                        currency: voodoo_transfer_args.currency,
+                                        amount: voodoo_transfer_args.amount,
+                                        transfer_id,
+                                    }
+                                )
+                            )?
+                        )
+                    ).await?;
 
-            while let Some(msg) = voodoo_read.next().await {
-                let msg = msg?;
-                if !msg.is_text() {
-                    println!("Incoming non-text:");
+                    while let Some(msg) = voodoo_read.next().await {
+                        let msg = msg?;
+                        if !msg.is_text() {
+                            println!("Incoming non-text:");
+                        }
+                        println!("{}", msg);
+                    }
                 }
-                println!("{}", msg);
             }
 
             pods.delete(&pod_name, &DeleteParams::default()).await?;
@@ -1207,6 +1398,15 @@ async fn main() -> anyhow::Result<()> {
             // takes some time to go away, so if we want to perform some more voodoo (issue another
             // command to it), we will have to wait until it's deleted, then recreate it. This will
             // quickly become annoying.
+            // Some mechanisms by which this could be achieved:
+            // - voodoo-doll could be run as a job with no history and a generatename
+            //   - https://serverfault.com/a/868826
+            //   - https://stackoverflow.com/questions/41385403/how-to-automatically-remove-completed-kubernetes-jobs-created-by-a-cronjob
+            //   - https://stackoverflow.com/a/54635208
+            // - voodoo-doll could have a service account provided, and it could just remove itself
+            //   when its time runs out
+            // - voodoo-doll could be a Deployment, and could be scaled up and down on-demand,
+            //   going down to zero when we don't want it around
         }
     }
 
