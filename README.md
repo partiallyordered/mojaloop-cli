@@ -120,7 +120,7 @@ maintainability, development velocity, and tooling.
     - https://crates.io/crates/rustyline
     - https://github.com/hoelzro/lua-repl/
     - https://old.reddit.com/r/rust/comments/b1t6da/what_crates_should_i_use_to_make_a_repl/
-- It _might_ be possible to embed the voodoo-doll docker image in this binary, then somehow deploy
+- It _might_ be possible to embed the voodoo-doll docker image _in_ this binary, then somehow deploy
     it into the cluster (put up our own image registry proxy? inject it into the cluster's image
     registry, as Skaffold does (see how it achieves this)?)
 - create a json input format (which might be similar to the output of dry-run?) such that users can

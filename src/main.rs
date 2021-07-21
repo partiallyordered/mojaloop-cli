@@ -665,6 +665,8 @@ mod port_forward {
     // the file.
     use crate::Port;
 
+    // TODO: somehow, when establishing port-forward fails because the pod is still coming up, this
+    // doesn't cause the application to fail.
     pub async fn from_params(
         pods: &Api<Pod>,
         label: &str,
@@ -1276,7 +1278,7 @@ async fn main() -> anyhow::Result<()> {
         },
 
         SubCommand::Voodoo(voodoo_args) => {
-            use voodoo_doll;
+            use voodoo_doll::protocol::*;
             use futures_util::StreamExt;
             use tokio_tungstenite::{client_async, tungstenite::protocol::Message};
             use futures::SinkExt;
@@ -1344,8 +1346,8 @@ async fn main() -> anyhow::Result<()> {
                     voodoo_write.send(
                         Message::Text(
                             serde_json::to_string(
-                                &voodoo_doll::protocol::ClientMessage::Transfer(
-                                    voodoo_doll::protocol::TransferMessage {
+                                &ClientMessage::Transfer(
+                                    TransferMessage {
                                         msg_sender: voodoo_transfer_args.payer,
                                         msg_recipient: voodoo_transfer_args.payee,
                                         currency: voodoo_transfer_args.currency,
@@ -1359,17 +1361,38 @@ async fn main() -> anyhow::Result<()> {
 
                     while let Some(msg) = voodoo_read.next().await {
                         let msg = msg?;
-                        if !msg.is_text() {
-                            println!("Incoming non-text:");
+                        match msg {
+                            Message::Text(s) => {
+                                let response_msg: ServerMessage =
+                                    serde_json::from_str(&s)?;
+                                match response_msg {
+                                    ServerMessage::TransferComplete(tc) => {
+                                        if tc.id == transfer_id {
+                                            println!("Transfer complete. ID: {}", transfer_id);
+                                            break;
+                                        }
+                                    }
+                                    ServerMessage::TransferError(te) => {
+                                        if te.id == transfer_id {
+                                            println!("Transfer error. Error: {:?}", s);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                println!("Incoming non-text:");
+                                println!("{}", msg);
+                            }
                         }
-                        println!("{}", msg);
                     }
                 }
             }
 
+            // Cleanup
+            voodoo_write.close().await?;
+            // voodoo_read.close();
             pods.delete(&pod_name, &DeleteParams::default()).await?;
-
-            // voodoo_write
 
             // TODO: check for an existing voodoo doll in the cluster
             //
