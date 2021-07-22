@@ -1343,17 +1343,21 @@ async fn main() -> anyhow::Result<()> {
                 VoodooSubCommand::Transfer(voodoo_transfer_args) => {
                     let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
                         transfer::TransferId(fspiox_api::common::CorrelationId::new()));
+                    let mut transfers = Vec::new();
+                    transfers.push(
+                        TransferMessage {
+                            msg_sender: voodoo_transfer_args.payer,
+                            msg_recipient: voodoo_transfer_args.payee,
+                            currency: voodoo_transfer_args.currency,
+                            amount: voodoo_transfer_args.amount,
+                            transfer_id,
+                        }
+                    );
                     voodoo_write.send(
                         Message::Text(
                             serde_json::to_string(
-                                &ClientMessage::Transfer(
-                                    TransferMessage {
-                                        msg_sender: voodoo_transfer_args.payer,
-                                        msg_recipient: voodoo_transfer_args.payee,
-                                        currency: voodoo_transfer_args.currency,
-                                        amount: voodoo_transfer_args.amount,
-                                        transfer_id,
-                                    }
+                                &ClientMessage::Transfers(
+                                    transfers
                                 )
                             )?
                         )
