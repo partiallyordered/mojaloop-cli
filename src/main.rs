@@ -193,20 +193,27 @@ struct Voodoo {
     // /// endpoints will not receive them. Endpoints will be restored after the command completes.
     // #[clap(short,long)]
     // hijack: bool,
-    deploy: Option<bool>,
+    /// Deploy the in-cluster component for the voodoo subcommand
+    #[clap(long)]
+    deploy: bool,
+    /// Destroy the in-cluster component after running this command
+    #[clap(long)]
+    destroy: bool,
     #[clap(subcommand)]
     subcmd: VoodooSubCommand,
 }
 
-#[derive(Clap)]
+#[derive(Clap, PartialEq, Eq, Clone)]
 enum VoodooSubCommand {
     /// Deploy the in-cluster component of this tool
     Deploy,
+    /// Destroy the in-cluster component of this tool
+    Destroy,
     /// Perform an end-to-end transfer, without a quote
     Transfer(PuppetTransfer),
 }
 
-#[derive(Clap)]
+#[derive(Clap, PartialEq, Eq, Clone)]
 struct PuppetTransfer {
     payer: FspId,
     payee: FspId,
@@ -413,6 +420,7 @@ struct Participants {
 
 #[derive(Clap)]
 enum ParticipantsSubCommand {
+    #[clap(alias = "ls", alias = "l")]
     /// List participants
     List,
     // TODO: a "describe" that fetches more/better info?
@@ -432,7 +440,7 @@ enum ParticipantSubCommand {
     #[clap(alias = "acc")]
     Accounts(ParticipantAccount),
     /// Create a participant
-    #[clap(alias = "add")]
+    #[clap(alias = "add", alias = "ob")]
     Onboard(ParticipantOnboard),
     /// Modify participant endpoints
     #[clap(alias = "ep")]
@@ -625,6 +633,8 @@ pub enum MojaloopCliError {
     // TODO: tell the user what command to execute to create such an account?
     #[error("Participant {0} does not have {1} settlement account")]
     ParticipantMissingCurrencyAccount(FspId, Currency),
+    #[error("Failed to connect to voodoo doll: {0}")]
+    VoodooDollConnectionError(String),
 }
 
 async fn get_pods(
@@ -1288,33 +1298,47 @@ async fn main() -> anyhow::Result<()> {
 
             let p: Pod = voodoo_doll::pod().unwrap();
 
-            let pod_label_key = "app.kubernetes.io/name";
-            let pod_label = format!(
-                "{}={}",
-                pod_label_key,
-                p.metadata.labels.unwrap().get(pod_label_key).unwrap(),
-            );
+            async fn get_pod_stream<'a>(
+                p: &Pod,
+                pods: &Api<Pod>,
+            ) -> Result<tokio_tungstenite::WebSocketStream<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>, MojaloopCliError>
+            {
+                let pod_label_key = "app.kubernetes.io/name";
+                let pod_label = format!(
+                    "{}={}",
+                    pod_label_key,
+                    p.metadata.labels.as_ref().unwrap().get(pod_label_key).unwrap(),
+                );
 
-            let voodoo_doll_stream = port_forward::from_params(
-                &pods,
-                // TODO: we sort of can't really know how the pod is going to be identified,
-                // therefore this information should be exposed by the voodoo-doll lib, one way or
-                // another. Perhaps voodoo-doll lib should have a function that accepts a pod list
-                // (our &pods above) and returns the correct pod, if it is present. And creates it,
-                // if not?
-                &pod_label,
-                &p.spec.unwrap().containers[0].name,
-                Port::Number(3030),
-            ).await?;
+                let voodoo_doll_stream = port_forward::from_params(
+                    &pods,
+                    // TODO: we sort of can't really know how the pod is going to be identified,
+                    // therefore this information should be exposed by the voodoo-doll lib, one way or
+                    // another. Perhaps voodoo-doll lib should have a function that accepts a pod list
+                    // (our &pods above) and returns the correct pod, if it is present. And creates it,
+                    // if not?
+                    &pod_label,
+                    &p.spec.as_ref().unwrap().containers[0].name,
+                    Port::Number(3030),
+                ).await.map_err(|e| MojaloopCliError::VoodooDollConnectionError(e.to_string()))?;
 
-            // TODO: we sort of can't really know what endpoint to call, therefore this information
-            // should be exposed by the voodoo-doll lib, one way or another.
-            // let uri = "/voodoo".parse::<http::Uri>().unwrap();
-            let (ws_stream, _) = client_async("ws://host.ignored/voodoo", voodoo_doll_stream).await?;
+                // TODO: we sort of can't really know what endpoint to call, therefore this information
+                // should be exposed by the voodoo-doll lib, one way or another.
+                // let uri = "/voodoo".parse::<http::Uri>().unwrap();
+                let (ws_stream, _) = client_async("ws://host.ignored/voodoo", voodoo_doll_stream)
+                    .await.map_err(|e| MojaloopCliError::VoodooDollConnectionError(e.to_string()))?;
 
-            let (mut voodoo_write, mut voodoo_read) = ws_stream.split();
+                Ok(ws_stream)
+            }
 
-            match voodoo_args.subcmd {
+            let destroy = voodoo_args.destroy && voodoo_args.subcmd != VoodooSubCommand::Destroy;
+
+            match voodoo_args.subcmd.clone() {
+                VoodooSubCommand::Destroy => {
+                    let pod_name = p.metadata.name.as_ref().unwrap();
+                    pods.delete(&pod_name, &DeleteParams::default()).await?;
+                }
+
                 VoodooSubCommand::Deploy => {
                     // TODO: here we fail if the pod exists or is being created/deleted- need to handle
                     // this better.
@@ -1324,7 +1348,7 @@ async fn main() -> anyhow::Result<()> {
                     ).await?;
 
                     // Wait until the pod is running
-                    let pod_name = p.metadata.name.unwrap();
+                    let pod_name = p.metadata.name.as_ref().unwrap();
                     let lp = ListParams::default()
                         .fields(format!("metadata.name={}", &pod_name).as_str())
                         .timeout(30);
@@ -1344,7 +1368,9 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
+
                 VoodooSubCommand::Transfer(voodoo_transfer_args) => {
+                    let (mut voodoo_write, mut voodoo_read) = get_pod_stream(&p, &pods).await?.split();
                     let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
                         transfer::TransferId(fspiox_api::common::CorrelationId::new()));
                     let mut transfers = Vec::new();
@@ -1386,6 +1412,9 @@ async fn main() -> anyhow::Result<()> {
                                             break;
                                         }
                                     }
+                                    _ => {
+                                        // Ignore anything else; we're not interested
+                                    }
                                 }
                             }
                             _ => {
@@ -1394,13 +1423,16 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
+
+                    // Cleanup
+                    voodoo_write.close().await?;
                 }
             }
 
-            // Cleanup
-            voodoo_write.close().await?;
-            // voodoo_read.close();
-            pods.delete(&pod_name, &DeleteParams::default()).await?;
+            if destroy {
+                let pod_name = p.metadata.name.unwrap();
+                pods.delete(&pod_name, &DeleteParams::default()).await?;
+            }
 
             // TODO: check for an existing voodoo doll in the cluster
             //
