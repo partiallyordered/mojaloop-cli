@@ -8,7 +8,9 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-clap = "3.0.0-beta.2"
+# Pinning clap to avoid compile issues with 3.0.0-beta.4.
+clap = "=3.0.0-beta.2"
+clap_derive = "=3.0.0-beta.2"
 cli-table = "0.4"
 hyper = "0.14"
 http = "0.2.4" # probably needs to be the same as our version of hyper
