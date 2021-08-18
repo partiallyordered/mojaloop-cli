@@ -1,6 +1,6 @@
 [package]
 name = "mojaloop-cli"
-version = "0.3.0"
+version = "0.7.0"
 authors = ["msk- <mattkingston@gmail.com>"]
 edition = "2018"
 
@@ -8,7 +8,9 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-clap = "3.0.0-beta.2"
+# Pinning clap to avoid compile issues with 3.0.0-beta.4.
+clap = "=3.0.0-beta.2"
+clap_derive = "=3.0.0-beta.2"
 cli-table = "0.4"
 hyper = "0.14"
 http = "0.2.4" # probably needs to be the same as our version of hyper
@@ -16,9 +18,9 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "cbda45110bdbde52c5998aef8dee386d9a11dd81", features = ["hyper"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "ea15750b6ddbd1e7902731ea932186e204e8ecd3", features = ["hyper"] }
 # mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper"] }
-fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "8a91c68d30196526f3a878556db52d469c451e6d", features = ["fsp_http"] }
+fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "71077473df01cbab245fe334690848dbba998f23", features = ["fsp_http"] }
 # fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http"] }
 thiserror = "1.0"
 httparse = "1.4"
@@ -32,6 +34,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
 strum_macros = "0.21"
-voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "d5357a0ca73a7eaea8c0a7f5618d1dd882f30109" }
+voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "07b34f2b7b39592b92d14b72148def051d4e2cf1" }
 # voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
 tokio-tungstenite = "0.14"
+rust_decimal = "1"

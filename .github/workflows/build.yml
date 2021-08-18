@@ -1,0 +1,73 @@
+name: Publish to Github
+
+on:
+  push:
+    branches:
+    - '**'
+
+jobs:
+  build:
+    name: Smoke test builds
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        build: [linux, macos]
+        # build: [linux, arm, arm-v7, macos]
+        include:
+        - build: linux
+          os: ubuntu-latest
+          rust: stable
+          target: x86_64-unknown-linux-musl
+          cross: false
+        - build: macos
+          os: macos-latest
+          rust: stable
+          target: x86_64-apple-darwin
+          cross: false
+        # - build: arm
+        #   os: ubuntu-latest
+        #   rust: stable
+        #   target: arm-unknown-linux-gnueabihf
+        #   cross: true
+        # - build: arm-v7
+        #   os: ubuntu-latest
+        #   rust: stable
+        #   target: armv7-unknown-linux-gnueabihf
+        #   cross: true
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Install correct toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        target: ${{ matrix.target }}
+        use-cross: ${{ matrix.cross }}
+        override: true
+
+    - name: Install tools and libs
+      shell: bash
+      # TODO: Do this more like: https://github.com/lotabout/skim/tree/6df015987934bd63121be53d8659da0f44237dac/.github/workflows
+      # In general probably study that other one a bit more. Also:
+      # https://github.com/briansmith/webpki/blob/18cda8a5e32dfc2723930018853a984bd634e667/.github/workflows/ci.yml
+      # in particular the test info on PRs: https://github.com/briansmith/webpki/pull/218#issuecomment-823721570
+      run: |
+        case $RUNNER_OS in
+            Linux)
+                sudo apt-get update
+                sudo apt-get install -y -qq pkg-config libssl-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev musl-tools
+                ;;
+            macOS)
+                brew install openssl@1.1
+                ;;
+        esac
+
+    - name: build
+      uses: actions-rs/cargo@v1
+      with:
+        use-cross: ${{ matrix.cross }}
+        command: build
+        args: --target ${{ matrix.target }}

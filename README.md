@@ -113,6 +113,9 @@ maintainability, development velocity, and tooling.
 
 ### TODO
 - rename: mojo?
+- A mode that displays all HTTP requests that are exchanged with the switch (and whatever else) as
+    they happen. This will be useful for debugging API usage and especially for reproducing bugs in
+    either this software, or the switch.
 - A repl? It may be better to expose an API to an existing language, such as Lua or Python, and
     use its repl. Preferably one with autocomplete. Although `rustyline` below looks like it has
     the features we'd be interested in.
@@ -120,6 +123,7 @@ maintainability, development velocity, and tooling.
     - https://crates.io/crates/rustyline
     - https://github.com/hoelzro/lua-repl/
     - https://old.reddit.com/r/rust/comments/b1t6da/what_crates_should_i_use_to_make_a_repl/
+    Or perhaps just implement a sync voodoo client in a given lang and use its repl?
 - It _might_ be possible to embed the voodoo-doll docker image _in_ this binary, then somehow deploy
     it into the cluster (put up our own image registry proxy? inject it into the cluster's image
     registry, as Skaffold does (see how it achieves this)?)
