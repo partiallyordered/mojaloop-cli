@@ -193,12 +193,15 @@ struct Voodoo {
     // /// endpoints will not receive them. Endpoints will be restored after the command completes.
     // #[clap(short,long)]
     // hijack: bool,
+    deploy: Option<bool>,
     #[clap(subcommand)]
     subcmd: VoodooSubCommand,
 }
 
 #[derive(Clap)]
 enum VoodooSubCommand {
+    /// Deploy the in-cluster component of this tool
+    Deploy,
     /// Perform an end-to-end transfer, without a quote
     Transfer(PuppetTransfer),
 }
@@ -1285,34 +1288,6 @@ async fn main() -> anyhow::Result<()> {
 
             let p: Pod = voodoo_doll::pod().unwrap();
 
-            // TODO: here we fail if the pod exists or is being created/deleted- need to handle
-            // this better.
-            pods.create(
-                &kube::api::PostParams::default(),
-                &p,
-            ).await?;
-
-            // Wait until the pod is running
-            let pod_name = p.metadata.name.unwrap();
-            let lp = ListParams::default()
-                .fields(format!("metadata.name={}", &pod_name).as_str())
-                .timeout(30);
-            let mut stream = pods.watch(&lp, "0").await?.boxed();
-            while let Some(status) = stream.try_next().await? {
-                match status {
-                    WatchEvent::Added(o) => {
-                        println!("Added {}", o.name());
-                    }
-                    WatchEvent::Modified(o) => {
-                        let s = o.status.as_ref().expect("status exists on pod");
-                        if s.phase.clone().unwrap_or_default() == "Running" {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
             let pod_label_key = "app.kubernetes.io/name";
             let pod_label = format!(
                 "{}={}",
@@ -1340,6 +1315,35 @@ async fn main() -> anyhow::Result<()> {
             let (mut voodoo_write, mut voodoo_read) = ws_stream.split();
 
             match voodoo_args.subcmd {
+                VoodooSubCommand::Deploy => {
+                    // TODO: here we fail if the pod exists or is being created/deleted- need to handle
+                    // this better.
+                    pods.create(
+                        &kube::api::PostParams::default(),
+                        &p,
+                    ).await?;
+
+                    // Wait until the pod is running
+                    let pod_name = p.metadata.name.unwrap();
+                    let lp = ListParams::default()
+                        .fields(format!("metadata.name={}", &pod_name).as_str())
+                        .timeout(30);
+                    let mut stream = pods.watch(&lp, "0").await?.boxed();
+                    while let Some(status) = stream.try_next().await? {
+                        match status {
+                            WatchEvent::Added(o) => {
+                                println!("Added {}", o.name());
+                            }
+                            WatchEvent::Modified(o) => {
+                                let s = o.status.as_ref().expect("status exists on pod");
+                                if s.phase.clone().unwrap_or_default() == "Running" {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 VoodooSubCommand::Transfer(voodoo_transfer_args) => {
                     let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
                         transfer::TransferId(fspiox_api::common::CorrelationId::new()));
