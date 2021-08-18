@@ -4,13 +4,10 @@ on:
   push:
     tags:
     - 'v[0-9]+.[0-9]+.[0-9]+'
-    branches:
-    - '**'
 
 jobs:
   # TODO: delete the release if it fails? Or just hope to notice and do so manually?
   create-release:
-    if: ${{ github.event_name == 'push' && contains(github.ref, '/refs/tags') }}
     name: Create Github Release
     runs-on: ubuntu-latest
     steps:
@@ -86,13 +83,11 @@ jobs:
         override: true
 
     - name: Get release download URL
-      if: ${{ github.event_name == 'push' && contains(github.ref, '/refs/tags') }}
       uses: actions/download-artifact@v1
       with:
         name: artifacts
         path: artifacts
     - name: Set release upload URL and release version
-      if: ${{ github.event_name == 'push' && contains(github.ref, '/refs/tags') }}
       shell: bash
       run: |
         release_upload_url="$(cat artifacts/release-upload-url)"
@@ -126,7 +121,6 @@ jobs:
         command: build
         args: --release --target ${{ matrix.target }}
     - name: Package Artifacts
-      if: ${{ github.event_name == 'push' && contains(github.ref, '/refs/tags') }}
       run: |
         src=$(pwd)
         stage=
@@ -155,7 +149,6 @@ jobs:
 
         cd $src
     - name: Upload release archive
-      if: ${{ github.event_name == 'push' && contains(github.ref, '/refs/tags') }}
       uses: actions/upload-release-asset@v1.0.1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
