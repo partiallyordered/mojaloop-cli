@@ -34,7 +34,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
 strum_macros = "0.21"
-# voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "07b34f2b7b39592b92d14b72148def051d4e2cf1" }
-voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
+voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "07b34f2b7b39592b92d14b72148def051d4e2cf1" }
+# voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
 tokio-tungstenite = "0.14"
 rust_decimal = "1"
