@@ -31,6 +31,7 @@ use mojaloop_api::{
     central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
     central_ledger::settlement_models,
     central_ledger::participants,
+    settlement::{settlement_windows, settlement},
 };
 use fspiox_api::{
     build_post_quotes, build_transfer_prepare, FspiopRequestBody,
@@ -41,15 +42,14 @@ use fspiox_api::{
 extern crate clap;
 use clap::Clap;
 
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use thiserror::Error;
 
-use hyper::http::{Request, StatusCode};
-use hyper::{client::conn::Builder, Body};
+use hyper::client::conn::Builder;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
-    api::{Api, DeleteParams, ListParams, PostParams, WatchEvent},
+    api::{Api, DeleteParams, ListParams, WatchEvent},
     Client, ResourceExt,
 };
 
@@ -119,12 +119,70 @@ enum SubCommand {
     /// Create quotes
     #[clap(alias = "q")]
     Quote(Quote),
+    /// Create and manage settlements and settlement windows
+    Settlement(Settlement),
     /// Complex behaviours and scenarios that require a component deployed to the cluster to
     /// simulate participants.
     Voodoo(Voodoo),
     // /// Onboard a participant
     // #[clap(alias = "ob")]
     // Onboard(Onboard),
+}
+
+#[derive(Clap)]
+struct Settlement {
+    #[clap(subcommand)]
+    subcmd: SettlementSubCommand,
+}
+
+#[derive(Clap)]
+enum SettlementSubCommand {
+    /// Create a settlement from existing settlement windows
+    #[clap(alias = "new")]
+    Create(SettlementCreate),
+    #[clap(alias = "win", alias = "windows")]
+    Window(SettlementWindow),
+    // TODO: settlement model subcommand
+}
+
+#[derive(Clap)]
+struct SettlementWindow {
+    #[clap(subcommand)]
+    subcmd: SettlementWindowSubCommand,
+}
+
+#[derive(Clap)]
+enum SettlementWindowSubCommand {
+    Close(CloseSettlementWindow),
+    #[clap(alias = "get")]
+    List(GetSettlementWindow),
+}
+
+#[derive(Clap)]
+struct GetSettlementWindow {
+    // TODO: should support multiple states
+    /// The settlement window state
+    #[clap(default_value = "OPEN")]
+    state: settlement_windows::SettlementWindowState,
+    // TODO: should support other filter options
+}
+
+#[derive(Clap)]
+struct CloseSettlementWindow {
+    #[clap(default_value = "Mojaloop CLI request", long, short)]
+    reason: String,
+    #[clap(index = 1)]
+    id: settlement_windows::SettlementWindowId,
+}
+
+#[derive(Clap)]
+struct SettlementCreate {
+    #[clap(short, long, default_value = "Mojaloop CLI request")]
+    reason: String,
+    #[clap(index = 1, required = true)]
+    settlement_model: String,
+    #[clap(index = 2, required = true, multiple = true)]
+    settlement_window_ids: Vec<settlement_windows::SettlementWindowId>,
 }
 
 // #[derive(Clap)]
@@ -205,6 +263,7 @@ struct Voodoo {
 
 #[derive(Clap, PartialEq, Eq, Clone)]
 enum VoodooSubCommand {
+    // TODO: version argument to Deploy?
     /// Deploy the in-cluster component of this tool
     Deploy,
     /// Destroy the in-cluster component of this tool
@@ -720,6 +779,7 @@ mod port_forward {
         CentralLedger,
         MlApiAdapter,
         QuotingService,
+        CentralSettlement,
     }
 
     pub async fn get(
@@ -738,6 +798,14 @@ mod port_forward {
                         "app.kubernetes.io/name=quoting-service",
                         "quoting-service",
                         Port::Name("http-api".to_string()),
+                    ).await?
+                ),
+                Services::CentralSettlement => result.push(
+                    from_params(
+                        pods,
+                        "app.kubernetes.io/name=centralsettlement-service",
+                        "centralsettlement-service",
+                        Port::Number(3007),
                     ).await?
                 ),
                 Services::CentralLedger => result.push(
@@ -828,12 +896,25 @@ async fn main() -> anyhow::Result<()> {
             port_forward::Services::CentralLedger,
             port_forward::Services::MlApiAdapter,
             port_forward::Services::QuotingService,
+            port_forward::Services::CentralSettlement,
         ]
     ).await?;
     // In reverse order than they were requested
+    let central_settlement_stream = port_forwards.pop().unwrap();
     let quoting_service_stream = port_forwards.pop().unwrap();
     let ml_api_adapter_stream = port_forwards.pop().unwrap();
     let central_ledger_stream = port_forwards.pop().unwrap();
+
+    let (mut central_settlement_request_sender, central_settlement_connection) = Builder::new()
+        .handshake(central_settlement_stream)
+        .await?;
+
+    // spawn a task to poll the connection and drive the HTTP state
+    tokio::spawn(async move {
+        if let Err(e) = central_settlement_connection.await {
+            eprintln!("Error in connection: {}", e);
+        }
+    });
 
     let (mut quoting_service_request_sender, quoting_service_connection) = Builder::new()
         .handshake(quoting_service_stream)
@@ -869,7 +950,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     async fn set_participant_endpoints(
-        participant_name: &String,
+        participant_name: &FspId,
         url: &String,
         request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
     ) -> anyhow::Result<()> {
@@ -906,6 +987,60 @@ async fn main() -> anyhow::Result<()> {
     // The Operations and corresponding functionality could be exported to be used elsewhere.
     // let operations = match opts.subcmd {
     match opts.subcmd {
+        SubCommand::Settlement(settlement_args) => {
+            match settlement_args.subcmd {
+                SettlementSubCommand::Window(window_args) => {
+                    match window_args.subcmd {
+                        SettlementWindowSubCommand::List(get_window_args) => {
+                            let request = to_hyper_request(settlement_windows::GetSettlementWindows {
+                                state: Some(get_window_args.state),
+                                currency: None,
+                                from_date_time: None,
+                                participant_id: None,
+                                to_date_time: None,
+                            })?;
+
+                            let (_, windows) = send_hyper_request::<settlement_windows::SettlementWindows>(&mut central_settlement_request_sender, request).await?;
+
+                            // TODO: table
+                            println!("{:?}", windows);
+                        }
+
+                        SettlementWindowSubCommand::Close(close_window_args) => {
+                            let request = to_hyper_request(settlement_windows::CloseSettlementWindow {
+                                id: close_window_args.id,
+                                payload: settlement_windows::SettlementWindowClosurePayload {
+                                    reason: close_window_args.reason,
+                                    state: settlement_windows::SettlementWindowCloseState::Closed,
+                                }
+                            })?;
+
+                            send_hyper_request_no_response_body(&mut central_settlement_request_sender, request).await?;
+
+                            println!("Closed window: {}", close_window_args.id);
+                        }
+                    }
+                }
+
+                SettlementSubCommand::Create(create_settlement_args) => {
+                    let request = to_hyper_request(settlement::PostSettlement {
+                        new_settlement: settlement::NewSettlement {
+                            reason: create_settlement_args.reason,
+                            settlement_model: create_settlement_args.settlement_model,
+                            settlement_windows: create_settlement_args.settlement_window_ids
+                                .iter()
+                                .map(|id| settlement::WindowParametersNewSettlement { id: *id })
+                                .collect(),
+                        }
+                    })?;
+                    let (_, new_settlement) = send_hyper_request::<settlement::Settlement>(&mut central_settlement_request_sender, request).await?;
+
+                    // TODO: pretty-print
+                    println!("Created settlement ID: {:?}. Result: {:?}", new_settlement.id, new_settlement);
+                }
+            }
+        }
+
         SubCommand::Quote(quote_args) => {
             match quote_args.subcmd {
                 QuoteSubCommand::Create(quote_create_args) => {
@@ -1003,8 +1138,9 @@ async fn main() -> anyhow::Result<()> {
                                 currency: Currency,
                                 r#type: HubAccountType
                             ) -> Result<(), MojaloopCliError> {
+                                // use std::convert::From;
                                 let request = to_hyper_request(PostHubAccount {
-                                    name: "Hub".to_string(),
+                                    name: FspId::from("Hub").unwrap(),
                                     account: HubAccount {
                                         r#type,
                                         currency,
@@ -1041,7 +1177,7 @@ async fn main() -> anyhow::Result<()> {
                             // TODO: might need to take hub name as a parameter, in order to
                             // support newer and older hub names of "hub" and "Hub"? Or just don't
                             // support old hub name? Or just try both?
-                            let request = to_hyper_request(GetDfspAccounts { name: "Hub".to_string() })?;
+                            let request = to_hyper_request(GetDfspAccounts { name: FspId::from("Hub").unwrap() })?;
                             let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
                             let table = accounts.iter().map(|a| vec![
                                 a.ledger_account_type.cell(),

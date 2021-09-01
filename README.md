@@ -11,12 +11,12 @@ cluster and namespace:
 
 A simple example creating SEK accounts and a participant in a switch. The output is a little rough
 at the time of writing:
-```
+```sh
 $ mojaloop-cli hub accounts create all SEK
 Created hub reconciliation account: SEK
 Created hub settlement account: SEK
 
-$ mojaloop-cli participant testfspsek onboard SEK http://testfspsek.io/fspiopapi 10000 10000
+$ mojaloop-cli participant testfspsek onboard SEK http://testfspsek.io/fspiopapi 10000
 Post participants result:
 Participant { name: "testfspsek", id: "http://central-ledger/participants/testfspsek", created: 2021-06-28T22:35:36Z, is_active: 1, accounts: [ParticipantAccount { id: SettlementAccountId(23), ledger_account_type: Position, currency: sek, is_active: 0 }, ParticipantAccount { id: SettlementAccountId(24), ledger_account_type: Settlement, currency: sek, is_active: 0 }] }
 Post initial position and limits result:
@@ -49,6 +49,24 @@ FspiopCallbackUrlQuotes http://testfspsek.io/
 FspiopCallbackUrlTransferError http://testfspsek.io/transfers/{{transferId}}/error
 FspiopCallbackUrlTransferPost http://testfspsek.io/transfers
 FspiopCallbackUrlTransferPut http://testfspsek.io/transfers/{{transferId}}
+
+# Deploy the in-cluster component
+$ mojaloop-cli voodoo deploy
+
+$ mojaloop-cli participant testfspsek2 onboard SEK http://testfspsek.io/fspiopapi 10000
+...
+
+$ mojaloop-cli voodoo transfer testfspsek1 testfspsek2 SEK 10
+Transfer complete. ID: 90cf19e8-328f-4839-afed-b579dba3c8b6
+
+$ mojaloop-cli settlement window close 1
+Closed window: 1
+
+$ mojaloop-cli settlement create 'DEFERREDNET' 1
+Created settlement 1. Result: Settlement { id: SettlementId(1), state: PendingSettlement, created_date: DateTime(2021-09-01T18:25:24Z), changed_date: DateTime(2021-09-01T18:25:24Z), settlement_windows: [SettlementSettlementWindow { id: SettlementWindowId(1), reason: Some("Mojaloop CLI request"), state: PendingSettlement, created_date: DateTime(2021-09-01T17:04:27Z), changed_date: Some(DateTime(2021-09-01T18:25:24Z)), content: Some([SettlementWindowContent { id: SettlementWindowContentId(1), settlement_window_id: None, state: PendingSettlement, ledger_account_type: Position, currency_id: MMK, created_date: DateTime(2021-09-01T18:25:02Z), changed_date: Some(DateTime(2021-09-01T18:25:24Z)), settlement_id: None }]) }], participants: [SettlementParticipant { id: ParticipantId(4), accounts: [SettlementAccount { id: ParticipantCurrencyId(3), reason: "Mojaloop CLI request", state: PendingSettlement, net_settlement_amount: NetSettlementAmount { amount: Amount(10), currency: MMK } }] }, SettlementParticipant { id: ParticipantId(5), accounts: [SettlementAccount { id: ParticipantCurrencyId(5), reason: "Mojaloop CLI request", state: PendingSettlement, net_settlement_amount: NetSettlementAmount { amount: Amount(-10), currency: MMK } }] }] }
+
+# Remove the in-cluster component
+$ mojaloop-cli voodoo destroy
 ```
 
 The current help describes functionality; most, though not all of this exists at present:
