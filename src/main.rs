@@ -28,9 +28,9 @@ use strum_macros::Display;
 
 use mojaloop_api::{
     common::to_hyper_request,
+    central_ledger::participants,
     central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
     central_ledger::settlement_models,
-    central_ledger::participants,
     settlement::{settlement_windows, settlement},
 };
 use fspiox_api::{
@@ -518,7 +518,9 @@ struct ParticipantLimits {
 
 #[derive(Clap)]
 enum ParticipantLimitsSubCommand {
-    // TODO: List(ParticipantLimitsGet),
+    #[clap(alias = "list", alias = "view")]
+    /// Get participant NDC
+    Get,
     // TODO: is it possible to chain these, i.e. set MMD 10000 set XOF 10000 set EUR 5000 etc.?
     /// Set participant NDC
     Set(ParticipantLimitsSet),
@@ -1179,23 +1181,24 @@ async fn main() -> anyhow::Result<()> {
                             // support old hub name? Or just try both?
                             let request = to_hyper_request(GetDfspAccounts { name: FspId::from("Hub").unwrap() })?;
                             let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
-                            let table = accounts.iter().map(|a| vec![
-                                a.ledger_account_type.cell(),
-                                a.currency.cell(),
-                                (if a.is_active == 1 { true } else { false }).cell(),
-                                a.changed_date.cell(),
-                                a.value.cell(),
-                                a.reserved_value.cell(),
-                            ])
-                            .table()
-                            .title(vec![
-                                "Account type".cell(),
-                                "Currency".cell(),
-                                "Active".cell(),
-                                "Changed date".cell(),
-                                "Notification threshold".cell(),
-                                "Reserved value".cell(),
-                            ]);
+                            let table = accounts.iter()
+                                .map(|a| vec![
+                                    a.ledger_account_type.cell(),
+                                    a.currency.cell(),
+                                    (if a.is_active == 1 { true } else { false }).cell(),
+                                    a.changed_date.cell(),
+                                    a.value.cell(),
+                                    a.reserved_value.cell(),
+                                ])
+                                .table()
+                                .title(vec![
+                                    "Account type".cell(),
+                                    "Currency".cell(),
+                                    "Active".cell(),
+                                    "Changed date".cell(),
+                                    "Notification threshold".cell(),
+                                    "Reserved value".cell(),
+                                ]);
                             print_stdout(table)?;
                         }
                     }
@@ -1243,6 +1246,27 @@ async fn main() -> anyhow::Result<()> {
             match &p_args.subcmd {
                 ParticipantSubCommand::Limits(participant_limits_args) => {
                     match &participant_limits_args.subcmd {
+                        ParticipantLimitsSubCommand::Get => {
+                            let request = to_hyper_request(participants::GetParticipantLimits {
+                                name: p_args.name.clone(),
+                            })?;
+
+                            let (_, limits) = send_hyper_request::<Vec<participants::NewParticipantLimit>>(&mut central_ledger_request_sender, request).await?;
+                            let table = limits.iter()
+                                .map(|l| vec![
+                                    l.currency.cell(),
+                                    l.limit.r#type.cell(),
+                                    l.limit.value.cell(),
+                                ])
+                                .table()
+                                .title(vec![
+                                    "Currency".cell(),
+                                    "Type".cell(),
+                                    "Value".cell(),
+                                ]);
+                            print_stdout(table)?;
+                        }
+
                         ParticipantLimitsSubCommand::Set(participant_limits_set_args) => {
                             let request = to_hyper_request(participants::PutParticipantLimit {
                                 name: p_args.name.clone(),

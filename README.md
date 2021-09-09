@@ -131,6 +131,7 @@ maintainability, development velocity, and tooling.
 
 ### TODO
 - rename: mojo?
+- automatic pagination of long results
 - A mode that displays all HTTP requests that are exchanged with the switch (and whatever else) as
     they happen. This will be useful for debugging API usage and especially for reproducing bugs in
     either this software, or the switch.
