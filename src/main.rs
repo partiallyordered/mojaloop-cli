@@ -29,7 +29,25 @@ use strum_macros::Display;
 use mojaloop_api::{
     common::to_hyper_request,
     central_ledger::participants,
-    central_ledger::participants::{HubAccountType, PostCallbackUrl, GetCallbackUrls, GetParticipants, Limit, LimitType, PostParticipant, InitialPositionAndLimits, GetDfspAccounts, HubAccount, PostHubAccount, DfspAccounts, PostInitialPositionAndLimits, NewParticipant, FspiopCallbackType},
+    central_ledger::participants::{
+        AnyAccountType,
+        DfspAccounts,
+        FspiopCallbackType,
+        GetCallbackUrls,
+        GetDfspAccounts,
+        GetParticipants,
+        HubAccount,
+        HubAccountType,
+        InitialPositionAndLimits,
+        Limit,
+        LimitType,
+        NewParticipant,
+        PostCallbackUrl,
+        PostHubAccount,
+        PostInitialPositionAndLimits,
+        PostParticipant,
+        PutParticipantAccount,
+    },
     central_ledger::settlement_models,
     settlement::{settlement_windows, settlement},
 };
@@ -597,6 +615,24 @@ enum ParticipantAccountsSubCommand {
     // is_active status?
     /// List participant accounts
     List,
+    /// Disable participant account
+    Disable(ParticipantAccountDisable),
+    /// Disable participant account
+    Enable(ParticipantAccountEnable),
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantAccountDisable {
+    // TODO: accept multiple currencies
+    #[clap(index = 1, required = true, multiple = true)]
+    currency: Vec<Currency>,
+}
+
+#[derive(Clap, Debug)]
+struct ParticipantAccountEnable {
+    // TODO: accept multiple currencies
+    #[clap(index = 1, required = true, multiple = true)]
+    currency: Vec<Currency>,
 }
 
 #[derive(Clap, Debug)]
@@ -1413,17 +1449,87 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                         }
+
                         ParticipantAccountsSubCommand::List => {
                             let request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
                             let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, request).await?;
                             // TODO: table
                             // println!("{:?}", accounts);
                             for acc in accounts {
-                                if acc.is_active == 1 {
-                                    println!("{} {} {}", acc.currency, acc.ledger_account_type, acc.value);
+                                println!(
+                                    "{} {} {} Active: {}",
+                                    acc.currency,
+                                    acc.ledger_account_type,
+                                    acc.value,
+                                    (if acc.is_active == 1 { true } else { false }),
+                                );
+                            }
+                        }
+
+                        ParticipantAccountsSubCommand::Enable(acc_enable_args) => {
+                            let get_accs_request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, get_accs_request).await?;
+                            for curr in &acc_enable_args.currency {
+                                let currency_acc = accounts.iter().find(|acc|
+                                    acc.currency == *curr && acc.ledger_account_type == AnyAccountType::Position
+                                );
+                                match currency_acc {
+                                    Some(acc) => {
+                                        let enable_request = to_hyper_request(PutParticipantAccount {
+                                            account_id: acc.id,
+                                            name: p_args.name,
+                                            set_active: true,
+                                        })?;
+                                        let (result, _) = send_hyper_request_no_response_body(
+                                            &mut central_ledger_request_sender,
+                                            enable_request,
+                                        ).await?;
+                                        println!(
+                                            "Enabling {} account {} for currency {}. HTTP result status: {}",
+                                            p_args.name,
+                                            acc.id,
+                                            curr,
+                                            result.status,
+                                        );
+                                    }
+                                    None => {
+                                        println!("Couldn't find account for currency {}", curr);
+                                    }
                                 }
                             }
                         }
+
+                        ParticipantAccountsSubCommand::Disable(acc_disable_args) => {
+                            let get_accs_request = to_hyper_request(GetDfspAccounts { name: p_args.name })?;
+                            let (_, accounts) = send_hyper_request::<DfspAccounts>(&mut central_ledger_request_sender, get_accs_request).await?;
+                            for curr in &acc_disable_args.currency {
+                                let currency_acc = accounts.iter().find(|acc| acc.currency == *curr);
+                                match currency_acc {
+                                    Some(acc) => {
+                                        let enable_request = to_hyper_request(PutParticipantAccount {
+                                            account_id: acc.id,
+                                            name: p_args.name,
+                                            set_active: false,
+                                        })?;
+                                        let (result, _) = send_hyper_request_no_response_body(
+                                            &mut central_ledger_request_sender,
+                                            enable_request,
+                                        ).await?;
+                                        println!(
+                                            "Disabling {} account {} for currency {}. HTTP result status: {}",
+                                            p_args.name,
+                                            acc.id,
+                                            curr,
+                                            result.status,
+                                        );
+                                    }
+                                    None => {
+                                        println!("Couldn't find account for currency {}", curr);
+                                    }
+                                }
+                            }
+                        }
+
                         ParticipantAccountsSubCommand::Upsert(acc) => {
                             println!("Not yet implemented");
                             // 1. get participant, make an error if it doesn't exist
