@@ -158,6 +158,7 @@ enum SettlementSubCommand {
     /// Create a settlement from existing settlement windows
     #[clap(alias = "new")]
     Create(SettlementCreate),
+    /// Settlement window commands
     #[clap(alias = "win", alias = "windows")]
     Window(SettlementWindow),
     // TODO: settlement model subcommand
@@ -171,13 +172,23 @@ struct SettlementWindow {
 
 #[derive(Clap)]
 enum SettlementWindowSubCommand {
+    /// Close a settlement window by ID
     Close(CloseSettlementWindow),
-    #[clap(alias = "get")]
-    List(GetSettlementWindow),
+    /// Show a settlement window by ID
+    Get(GetSettlementWindow),
+    // TODO: create a "list" subcommand that lists all settlement windows? Or just have that as the
+    // default "no filters" option to the filter subcommand.
+    /// Filter settlement windows
+    Filter(FilterSettlementWindows),
 }
 
 #[derive(Clap)]
 struct GetSettlementWindow {
+    id: settlement_windows::SettlementWindowId,
+}
+
+#[derive(Clap)]
+struct FilterSettlementWindows {
     // TODO: should support multiple states
     /// The settlement window state
     #[clap(default_value = "OPEN")]
@@ -1029,9 +1040,19 @@ async fn main() -> anyhow::Result<()> {
             match settlement_args.subcmd {
                 SettlementSubCommand::Window(window_args) => {
                     match window_args.subcmd {
-                        SettlementWindowSubCommand::List(get_window_args) => {
+                        SettlementWindowSubCommand::Get(get_window_args) => {
+                            let request = to_hyper_request(settlement_windows::GetSettlementWindow {
+                                id: get_window_args.id
+                            })?;
+
+                            let (_, window) = send_hyper_request::<settlement_windows::SettlementWindow>(&mut central_settlement_request_sender, request).await?;
+
+                            println!("{:?}", window);
+                        }
+
+                        SettlementWindowSubCommand::Filter(filter_window_args) => {
                             let request = to_hyper_request(settlement_windows::GetSettlementWindows {
-                                state: Some(get_window_args.state),
+                                state: Some(filter_window_args.state),
                                 currency: None,
                                 from_date_time: None,
                                 participant_id: None,

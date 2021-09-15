@@ -1,6 +1,6 @@
 [package]
 name = "mojaloop-cli"
-version = "0.10.0"
+version = "0.11.0"
 authors = ["msk- <mattkingston@gmail.com>"]
 edition = "2018"
 
@@ -18,7 +18,7 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "e417ccf31792fd767f4a620d9933fd95975282d5", features = ["hyper"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "f92f5a4e58531e81265641d5c54dce2676e9bd0c", features = ["hyper"] }
 # mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper"] }
 fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "fe1e36869ce523b083484bfbf8c96bdf59d9b3d1", features = ["fsp_http"] }
 # fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http"] }
