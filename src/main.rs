@@ -30,7 +30,6 @@ use mojaloop_api::{
     central_ledger::participants,
     central_ledger::participants::{
         AnyAccountType,
-        DfspAccounts,
         FspiopCallbackType,
         GetCallbackUrls,
         GetDfspAccounts,
@@ -59,8 +58,6 @@ use clap::Clap;
 
 use futures::TryStreamExt;
 use thiserror::Error;
-
-use hyper::client::conn::Builder;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::{
@@ -253,6 +250,11 @@ struct QuoteCreate {
 
 #[derive(Clap)]
 struct Voodoo {
+    // TODO: a command here that just hijacks a given participants endpoints. This way, we can
+    // deploy a voodoo-doll instance, hijack a participant or two, and send transfers at our
+    // leisure. The reason we can't do this at present is because some entity needs to receive the
+    // transfers in order for them to not be rejected by the switch. (Maybe set up some feature to
+    // control transfer timeouts also).
     // TODO: evaluate, uncomment:
     // #[clap(short,long)]
     // /// Create any participants, accounts etc. required by this command where they do not exist.
@@ -447,7 +449,7 @@ enum SettlementModelSubCommand {
 struct SettlementModelCreate {
     currency: fspiox_api::Currency,
     #[clap(short, long, default_value = "DEFERREDNET")]
-    name: String,
+    name: mojaloop_api::central_ledger::settlement_models::SettlementModelName,
     #[clap(short, long, parse(try_from_str), default_value = "true")]
     auto_position_reset: bool,
     #[clap(short, long, default_value = "position")]
@@ -772,173 +774,14 @@ async fn get_pods(
     )
 }
 
-// mod port_forward {
-//     use kube::api::{Api, ListParams};
-//     use k8s_openapi::api::core::v1::Pod;
-//     use crate::MojaloopCliError;
-//     use std::convert::TryInto;
-//
-//     // TODO: the presence of Port here probably suggests that many of the top-level errors here
-//     // should be in the port_forward module. Or the port_forward module should be flattened into
-//     // the file.
-//     use crate::Port;
-//
-//     // TODO: somehow, when establishing port-forward fails because the pod is still coming up, this
-//     // doesn't cause the application to fail.
-//     pub async fn from_params(
-//         pods: &Api<Pod>,
-//         label: &str,
-//         container_name: &str,
-//         port: Port,
-//     ) -> anyhow::Result<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)> {
-//         let lp = ListParams::default().labels(&label);
-//         let pod = pods
-//             .list(&lp).await.map_err(|e| MojaloopCliError::ClusterConnectionError(e))?
-//             .items.get(0).ok_or(MojaloopCliError::PodNotFound(label.to_string()))?.clone();
-//         let pod_name = pod.metadata.name.clone().unwrap();
-//         let pod_port = pod
-//             .spec
-//             .ok_or(MojaloopCliError::UnexpectedPodImplementation(pod_name.clone()))?
-//             .containers.iter().find(|c| c.name == container_name)
-//             .ok_or(MojaloopCliError::ServiceContainerNotFound(container_name.to_string(), pod_name.clone()))?
-//             .ports.as_ref().ok_or(MojaloopCliError::ServicePortNotFound(port.clone(), container_name.to_string()))?
-//             .iter()
-//             .find(|p| {
-//                 match &port {
-//                     Port::Name(port_name) => p.name.as_ref().map_or(false, |name| name == port_name),
-//                     Port::Number(port_num) => p.container_port == *port_num,
-//                 }
-//             })
-//             .ok_or(MojaloopCliError::ServicePortNotFound(port, container_name.to_string()))?.clone();
-//         // Ok((pod_name, port.container_port.try_into().unwrap()))
-//
-//         let mut pf = pods.portforward(
-//             &pod_name,
-//             &[pod_port.container_port.try_into().unwrap()]
-//         ).await?;
-//         let mut ports = pf.ports().unwrap();
-//         let result = ports[0].stream().unwrap();
-//         Ok(result)
-//     }
-//
-//     pub enum Services {
-//         CentralLedger,
-//         MlApiAdapter,
-//         QuotingService,
-//         CentralSettlement,
-//     }
-//
-//     pub async fn get(
-//         pods: &Api<Pod>,
-//         services: &[Services]
-//     ) ->
-//         anyhow::Result<Vec<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>>
-//     {
-//         let mut result = Vec::new();
-//
-//         for s in services {
-//             match s {
-//                 Services::QuotingService => result.push(
-//                     from_params(
-//                         pods,
-//                         "app.kubernetes.io/name=quoting-service",
-//                         "quoting-service",
-//                         Port::Name("http-api".to_string()),
-//                     ).await?
-//                 ),
-//                 Services::CentralSettlement => result.push(
-//                     from_params(
-//                         pods,
-//                         "app.kubernetes.io/name=centralsettlement-service",
-//                         "centralsettlement-service",
-//                         Port::Number(3007),
-//                     ).await?
-//                 ),
-//                 Services::CentralLedger => result.push(
-//                     from_params(
-//                         pods,
-//                         "app.kubernetes.io/name=centralledger-service",
-//                         "centralledger-service",
-//                         Port::Name("http-api".to_string()),
-//                     ).await?
-//                 ),
-//                 Services::MlApiAdapter => result.push(
-//                     from_params(
-//                         pods,
-//                         "app.kubernetes.io/name=ml-api-adapter-service",
-//                         "ml-api-adapter-service",
-//                         Port::Number(3000),
-//                     ).await?
-//                 ),
-//             };
-//         }
-//
-//         Ok(result)
-//     }
-// }
-
-// async fn send_hyper_request_no_response_body(
-//     request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
-//     req: hyper::Request<hyper::body::Body>
-// ) -> Result<(http::response::Parts, hyper::body::Bytes), MojaloopCliError>
-// {
-//     let resp = request_sender.send_request(req).await
-//         .map_err(|e| MojaloopCliError::PortForwardConnectionError(format!("{}", e)))?;
-//
-//     // Got the response okay, need to check if we have an ML API error
-//     let (parts, body) = resp.into_parts();
-//
-//     let body_bytes = hyper::body::to_bytes(body).await
-//         .map_err(|e| MojaloopCliError::PortForwardResponseParseError(format!("{}", e)))?;
-//
-//     if !parts.status.is_success() {
-//         serde_json::from_slice::<ErrorResponse>(&body_bytes)
-//             .map_or_else(
-//                 |e| Err(MojaloopCliError::PortForwardResponseParseError(
-//                         format!("Unhandled error parsing Mojaloop API error out of response {} {}", std::str::from_utf8(&body_bytes).unwrap(), e))),
-//                         |ml_api_err| Err(MojaloopCliError::MojaloopApiError(ml_api_err))
-//             )?
-//     }
-//     Ok((parts, body_bytes))
-// }
-
-// async fn send_hyper_request<Resp>(
-//     request_sender: &mut hyper::client::conn::SendRequest<hyper::body::Body>,
-//     req: hyper::Request<hyper::body::Body>
-// ) -> Result<(http::response::Parts, Resp), MojaloopCliError>
-// where
-//     Resp: serde::de::DeserializeOwned,
-// {
-//     let (parts, body_bytes) = send_hyper_request_no_response_body(request_sender, req).await?;
-//     let status = parts.status.as_u16();
-//
-//     if body_bytes.len() == 0 {
-//         return Err(MojaloopCliError::PortForwardResponseNoBody)
-//     }
-//
-//     let body_obj = match status {
-//         200..=202 => serde_json::from_slice::<Resp>(&body_bytes)
-//             .map_err(|e| MojaloopCliError::PortForwardResponseParseError(
-//                 format!("Unhandled error parsing body out of response {} {}", std::str::from_utf8(&body_bytes).unwrap(), e))),
-//         s => Err(MojaloopCliError::PortForwardUnhandledResponse(format!("{}", s))),
-//     }?;
-//
-//     Ok((parts, body_obj))
-// }
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    use mojaloop_api::clients::FspiopClient;
     let opts: Opts = Opts::parse();
 
     let pods = fspiox_api::clients::k8s::get_pods(
         &opts.kubeconfig,
         &opts.namespace,
-    ).await?;
-
-    let clients = mojaloop_api::clients::k8s::get_all_from_k8s(
-        &opts.kubeconfig,
-        &opts.namespace,
-        Some(pods),
     ).await?;
 
     async fn set_participant_endpoints(
@@ -954,7 +797,7 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: strip trailing slash
                 hostname: url.clone(),
             };
-            let result = client.send(request.into()).await?;
+            let result = client.send(request).await?;
             // TODO: url.clone() is just the hostname the user provided, not the actual endpoint
             // template. This could be confusing. We should show the whole endpoint template.
             println!("Updated {:?} endpoint to {}", callback_type, url.clone());
@@ -978,6 +821,15 @@ async fn main() -> anyhow::Result<()> {
     // let operations = match opts.subcmd {
     match opts.subcmd {
         SubCommand::Settlement(settlement_args) => {
+            // TODO: if we implement pools in fspiox_api with a minimum connection count of zero,
+            // we could "get" all clients at once, and lazily connect to them. This would make
+            // getting clients much more elegant.
+            let mut ml_settlement = mojaloop_api::clients::settlement::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
+            use mojaloop_api::clients::settlement as settlement_service;
             match settlement_args.subcmd {
                 SettlementSubCommand::Window(window_args) => {
                     match window_args.subcmd {
@@ -986,8 +838,7 @@ async fn main() -> anyhow::Result<()> {
                                 id: get_window_args.id
                             };
 
-                            let window = clients.central_ledger.send(request).await?;
-
+                            let window = ml_settlement.send(request).await?.des().await?;
                             println!("{:?}", window);
                         }
 
@@ -1000,7 +851,7 @@ async fn main() -> anyhow::Result<()> {
                                 to_date_time: None,
                             };
 
-                            let windows = clients.central_ledger.send(request.into()).await?;
+                            let windows = ml_settlement.send(request).await?;
 
                             // TODO: table
                             println!("{:?}", windows);
@@ -1015,7 +866,7 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             };
 
-                            clients.central_ledger.send(request.into()).await?;
+                            ml_settlement.send(request).await?;
 
                             println!("Closed window: {}", close_window_args.id);
                         }
@@ -1033,7 +884,16 @@ async fn main() -> anyhow::Result<()> {
                                 .collect(),
                         }
                     };
-                    let new_settlement = clients.settlement.send(request.into()).await?;
+                    let new_settlement = ml_settlement.send(request).await?.des().await;
+
+                    // TODO: handle this response:
+                    // {
+                    //   "errorInformation": {
+                    //     "errorCode": "3100",
+                    //     "errorDescription": "Generic validation error - Settlement model not found"
+                    //   }
+                    // }
+                    // by getting available settlement models and listing them for the user
 
                     // TODO: pretty-print
                     println!("Created settlement ID: {:?}. Result: {:?}", new_settlement.id, new_settlement);
@@ -1042,6 +902,11 @@ async fn main() -> anyhow::Result<()> {
         }
 
         SubCommand::Quote(quote_args) => {
+            let mut ml_quote = mojaloop_api::clients::quote::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
             match quote_args.subcmd {
                 QuoteSubCommand::Create(quote_create_args) => {
                     let post_quote = quote::QuoteRequest::new(
@@ -1058,13 +923,18 @@ async fn main() -> anyhow::Result<()> {
                         panic!();
                     };
 
-                    clients.quote.send(post_quote.into());
+                    ml_quote.send(post_quote).await?;
                     println!("{{ \"quote_id\": \"{}\", \"transaction_id\": \"{}\" }}", quote_id, transaction_id);
                 }
             }
         }
 
         SubCommand::Transfer(transfer_args) => {
+            let mut ml_transfer = mojaloop_api::clients::transfer::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
             match transfer_args.subcmd {
                 TransferSubCommand::Prepare(transfer_prepare_args) => {
                     match transfer_prepare_args.subcmd {
@@ -1084,7 +954,7 @@ async fn main() -> anyhow::Result<()> {
                                 panic!();
                             };
 
-                            clients.transfer.send(transfer_prepare.into()).await?;
+                            ml_transfer.send(transfer_prepare).await?;
 
                             println!("{}", transfer_id);
                         },
@@ -1106,7 +976,7 @@ async fn main() -> anyhow::Result<()> {
                                 panic!();
                             };
 
-                            clients.transfer.send(transfer_prepare.into()).await?;
+                            ml_transfer.send(transfer_prepare).await?;
 
                             println!("{}", transfer_id);
                         },
@@ -1116,6 +986,11 @@ async fn main() -> anyhow::Result<()> {
         }
 
         SubCommand::Hub(hub_args) => {
+            let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
             match hub_args.subcmd {
                 HubSubCommand::SettlementModel(hub_settlement_model_args) => {
                     match hub_settlement_model_args.subcmd {
@@ -1133,7 +1008,7 @@ async fn main() -> anyhow::Result<()> {
                                     currency: hub_settlement_model_create_args.currency,
                                 }
                             };
-                            clients.central_ledger.send(request.into()).await?;
+                            ml_central_ledger.send(request).await?;
                             println!("Created settlement model: {}", hub_settlement_model_create_args.name);
                             // Ok(())
                         }
@@ -1157,7 +1032,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 };
 
-                                client.send(request.into()).await?;
+                                client.send(request).await?;
 
                                 let str_hub_acc_type = match r#type {
                                     HubAccountType::HubMultilateralSettlement => "settlement",
@@ -1169,18 +1044,18 @@ async fn main() -> anyhow::Result<()> {
                             match hub_accs_create_args.subcmd {
                                 HubAccountsCreateSubCommand::Reconciliation(hub_accs_create_rec_args) => {
                                     for currency in &hub_accs_create_rec_args.currencies {
-                                        create_hub_account(&mut clients.central_ledger, *currency, HubAccountType::HubReconciliation).await?;
+                                        create_hub_account(&mut ml_central_ledger, *currency, HubAccountType::HubReconciliation).await?;
                                     }
                                 }
                                 HubAccountsCreateSubCommand::Settlement(hub_accs_create_sett_args) => {
                                     for currency in &hub_accs_create_sett_args.currencies {
-                                        create_hub_account(&mut clients.central_ledger, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                        create_hub_account(&mut ml_central_ledger, *currency, HubAccountType::HubMultilateralSettlement).await?;
                                     }
                                 }
                                 HubAccountsCreateSubCommand::All(hub_accs_create_all_args) => {
                                     for currency in &hub_accs_create_all_args.currencies {
-                                        create_hub_account(&mut clients.central_ledger, *currency, HubAccountType::HubReconciliation).await?;
-                                        create_hub_account(&mut clients.central_ledger, *currency, HubAccountType::HubMultilateralSettlement).await?;
+                                        create_hub_account(&mut ml_central_ledger, *currency, HubAccountType::HubReconciliation).await?;
+                                        create_hub_account(&mut ml_central_ledger, *currency, HubAccountType::HubMultilateralSettlement).await?;
                                     }
                                 }
                             }
@@ -1190,7 +1065,7 @@ async fn main() -> anyhow::Result<()> {
                             // support newer and older hub names of "hub" and "Hub"? Or just don't
                             // support old hub name? Or just try both?
                             let request = GetDfspAccounts { name: FspId::from("Hub").unwrap() };
-                            let accounts = clients.central_ledger.send(request.into()).await?;
+                            let accounts = ml_central_ledger.send(request).await?.des().await?;
                             let table = accounts.iter()
                                 .map(|a| vec![
                                     a.ledger_account_type.cell(),
@@ -1217,11 +1092,15 @@ async fn main() -> anyhow::Result<()> {
         }
 
         SubCommand::Participants(ps_args) => {
+            let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
             match ps_args.subcmd {
                 ParticipantsSubCommand::List => {
                     let request = GetParticipants {};
-                    let participants = clients.central_ledger.send(request.into()).await?;
-
+                    let participants = ml_central_ledger.send(request).await?.des().await?;
                     // TODO:
                     // 0. _really_ compress the output here, it's so sparse, making it quite
                     //    difficult to consume
@@ -1242,8 +1121,8 @@ async fn main() -> anyhow::Result<()> {
                             a.currency.cell(),
                             (if a.is_active == 1 { true } else { false }).cell(),
                         ])
-                        .table()
-                        .title(vec!["Account type".cell(), "Currency".cell(), "Active".cell()]);
+                            .table()
+                            .title(vec!["Account type".cell(), "Currency".cell(), "Active".cell()]);
 
                         print_stdout(table)?;
                         println!("");
@@ -1253,6 +1132,11 @@ async fn main() -> anyhow::Result<()> {
         }
 
         SubCommand::Participant(p_args) => {
+            let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
+                &opts.kubeconfig,
+                &opts.namespace,
+                Some(pods),
+            ).await?;
             match &p_args.subcmd {
                 ParticipantSubCommand::Limits(participant_limits_args) => {
                     match &participant_limits_args.subcmd {
@@ -1261,8 +1145,7 @@ async fn main() -> anyhow::Result<()> {
                                 name: p_args.name.clone(),
                             };
 
-                            let limits = clients.central_ledger.send(request.into()).await?;
-
+                            let limits = ml_central_ledger.send(request).await?.des().await?;
                             let table = limits.iter()
                                 .map(|l| vec![
                                     l.currency.cell(),
@@ -1290,7 +1173,7 @@ async fn main() -> anyhow::Result<()> {
                                     }
                                 }
                             };
-                            match clients.central_ledger.send(request.into()).await {
+                            match ml_central_ledger.send(request).await {
                                 Err(e) => {
                                     println!(
                                         "Failed to update {} {} limit to {}: {:?}\n",
@@ -1318,19 +1201,20 @@ async fn main() -> anyhow::Result<()> {
                             let request = GetCallbackUrls {
                                 name: p_args.name.clone(),
                             };
-                            let endpoints = clients.central_ledger.send(request.into()).await?;
+                            let endpoints = ml_central_ledger.send(request).await?.des().await?;
                             // TODO: table
                             for ep in endpoints.iter() {
                                 println!("{} {}", ep.r#type, ep.value);
                             }
                         },
+
                         ParticipantEndpointsSubCommand::Set(participant_endpoints_set_args) => {
                             match &participant_endpoints_set_args.subcmd {
                                 ParticipantEndpointsSetSubCommand::All(participant_endpoints_set_all_args) => {
                                     set_participant_endpoints(
                                         &p_args.name,
                                         &participant_endpoints_set_all_args.url.to_string(),
-                                        &mut clients.central_ledger,
+                                        &mut ml_central_ledger,
                                     ).await?;
                                 }
                             }
@@ -1340,7 +1224,7 @@ async fn main() -> anyhow::Result<()> {
 
                 ParticipantSubCommand::Onboard(participant_create_args) => {
                     let request = GetParticipants {};
-                    let existing_participants = clients.central_ledger.send(request.into()).await?;
+                    let existing_participants = ml_central_ledger.send(request).await?.des().await?;
 
                     match existing_participants.iter().find(|p| p.name == p_args.name) {
                         Some(existing_participant) => {
@@ -1353,7 +1237,7 @@ async fn main() -> anyhow::Result<()> {
                                     currency: participant_create_args.currency,
                                 },
                             };
-                            let post_participants_result = clients.central_ledger.send(post_participants_request.into()).await?;
+                            let post_participants_result = ml_central_ledger.send(post_participants_request).await?.des().await?;
                             println!("Post participants result:\n{:?}", post_participants_result);
 
                             let post_initial_position_and_limits_req = PostInitialPositionAndLimits {
@@ -1368,12 +1252,12 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             };
 
-                            clients.central_ledger.send(post_initial_position_and_limits_req.into()).await?;
+                            ml_central_ledger.send(post_initial_position_and_limits_req).await?;
 
                             set_participant_endpoints(
                                 &p_args.name,
                                 &participant_create_args.url.to_string(),
-                                &mut clients.central_ledger,
+                                &mut ml_central_ledger,
                             ).await?;
                         },
                     }
@@ -1385,8 +1269,7 @@ async fn main() -> anyhow::Result<()> {
                             let get_accounts = participants::GetDfspAccounts{
                                 name: p_args.name.clone(),
                             };
-                            let accounts = clients.central_ledger.send(get_accounts.into()).await?;
-                            // TODO: provide helpful error messages.
+                            let accounts = ml_central_ledger.send(get_accounts).await?.des().await?;
                             let account = accounts
                                 .iter()
                                 .find(|acc|
@@ -1397,8 +1280,12 @@ async fn main() -> anyhow::Result<()> {
                                 .unwrap_or(Err(MojaloopCliError::ParticipantMissingCurrencyAccount(
                                             p_args.name.clone(), part_acc_fund_args.currency)))?;
                             match &part_acc_fund_args.subcmd {
-                                ParticipantAccountFundSubCommand::In(part_acc_fund_in_args) => { println!("Not yet implemented") },
-                                ParticipantAccountFundSubCommand::Out(part_acc_fund_out_args) => { println!("Not yet implemented") },
+                                ParticipantAccountFundSubCommand::In(part_acc_fund_in_args) => {
+                                    println!("Not yet implemented")
+                                },
+                                ParticipantAccountFundSubCommand::Out(part_acc_fund_out_args) => {
+                                    println!("Not yet implemented")
+                                },
                                 ParticipantAccountFundSubCommand::Num(part_acc_fund_num_args) => {
                                     let action = if part_acc_fund_num_args.amount > Amount::ZERO {
                                         participants::ParticipantFundsInOutAction::RecordFundsIn
@@ -1419,14 +1306,14 @@ async fn main() -> anyhow::Result<()> {
                                             external_reference: "Voodoo".to_string(),
                                         }
                                     };
-                                    clients.central_ledger.send(funds_request.into()).await?;
+                                    ml_central_ledger.send(funds_request).await?;
                                 }
                             }
                         }
 
                         ParticipantAccountsSubCommand::List => {
                             let request = GetDfspAccounts { name: p_args.name };
-                            let accounts = clients.central_ledger.send(request.into()).await?;
+                            let accounts = ml_central_ledger.send(request).await?.des().await?;
                             // TODO: table
                             for acc in accounts {
                                 println!(
@@ -1441,7 +1328,7 @@ async fn main() -> anyhow::Result<()> {
 
                         ParticipantAccountsSubCommand::Enable(acc_enable_args) => {
                             let get_accs_request = GetDfspAccounts { name: p_args.name };
-                            let accounts = clients.central_ledger.send(get_accs_request.into()).await?;
+                            let accounts = ml_central_ledger.send(get_accs_request).await?.des().await?;
                             for curr in &acc_enable_args.currency {
                                 let currency_acc = accounts.iter().find(|acc|
                                     acc.currency == *curr && acc.ledger_account_type == AnyAccountType::Position
@@ -1453,7 +1340,7 @@ async fn main() -> anyhow::Result<()> {
                                             name: p_args.name,
                                             set_active: true,
                                         };
-                                        clients.central_ledger.send(enable_request.into()).await?;
+                                        ml_central_ledger.send(enable_request).await?;
                                         println!(
                                             "Enabled {} account {} for currency {}",
                                             p_args.name,
@@ -1470,7 +1357,7 @@ async fn main() -> anyhow::Result<()> {
 
                         ParticipantAccountsSubCommand::Disable(acc_disable_args) => {
                             let get_accs_request = GetDfspAccounts { name: p_args.name };
-                            let accounts = clients.central_ledger.send(get_accs_request.into()).await?;
+                            let accounts = ml_central_ledger.send(get_accs_request).await?.des().await?;
                             for curr in &acc_disable_args.currency {
                                 let currency_acc = accounts.iter().find(|acc| acc.currency == *curr);
                                 match currency_acc {
@@ -1480,7 +1367,7 @@ async fn main() -> anyhow::Result<()> {
                                             name: p_args.name,
                                             set_active: false,
                                         };
-                                        clients.central_ledger.send(enable_request.into()).await?;
+                                        ml_central_ledger.send(enable_request).await?;
                                         println!(
                                             "Disabled {} account {} for currency {}",
                                             p_args.name,
@@ -1527,30 +1414,32 @@ async fn main() -> anyhow::Result<()> {
             use tokio_tungstenite::{client_async, tungstenite::protocol::Message};
             use futures::SinkExt;
 
+            // TODO: it's really not this module's job to know how to deploy voodoo-doll, where and
+            // how to find it once it's deployed, and how to destroy it. That should be delegated
+            // to the voodoo-doll module.
+
             let p: Pod = voodoo_doll::pod().unwrap();
 
             async fn get_pod_stream<'a>(
-                p: &Pod,
-                pods: &Api<Pod>,
+                pods: Api<Pod>,
             ) -> Result<tokio_tungstenite::WebSocketStream<(impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin)>, MojaloopCliError>
             {
-                let pod_label_key = "app.kubernetes.io/name";
-                let pod_label = format!(
-                    "{}={}",
-                    pod_label_key,
-                    p.metadata.labels.as_ref().unwrap().get(pod_label_key).unwrap(),
-                );
+                use mojaloop_api::clients::k8s;
 
-                let voodoo_doll_stream = port_forward::from_params(
-                    &pods,
+                let voodoo_doll_stream = k8s::port_forward_stream(
+                    &None,
+                    &None,
+                    Some(pods),
                     // TODO: we sort of can't really know how the pod is going to be identified,
                     // therefore this information should be exposed by the voodoo-doll lib, one way or
                     // another. Perhaps voodoo-doll lib should have a function that accepts a pod list
                     // (our &pods above) and returns the correct pod, if it is present. And creates it,
                     // if not?
-                    &pod_label,
-                    &p.spec.as_ref().unwrap().containers[0].name,
-                    Port::Number(3030),
+                    k8s::KubernetesParams {
+                        container_name: "app",
+                        label: "app.kubernetes.io/name=voodoo-doll",
+                        port: k8s::Port::Number(3030),
+                    }
                 ).await.map_err(|e| MojaloopCliError::VoodooDollConnectionError(e.to_string()))?;
 
                 // TODO: we sort of can't really know what endpoint to call, therefore this information
@@ -1601,7 +1490,7 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 VoodooSubCommand::Transfer(voodoo_transfer_args) => {
-                    let (mut voodoo_write, mut voodoo_read) = get_pod_stream(&p, &pods).await?.split();
+                    let (mut voodoo_write, mut voodoo_read) = get_pod_stream(pods.clone()).await?.split();
                     let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
                         transfer::TransferId(fspiox_api::CorrelationId::new()));
                     let mut transfers = Vec::new();

@@ -20,8 +20,8 @@ futures = "0.3.15"
 futures-util = "0.3.15"
 # mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "d25034a6ac8be1faab78504e57f4220b9dc40a12", features = ["hyper", "clients-kube"] }
 mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper", "clients-kube"] }
-# fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "fe1e36869ce523b083484bfbf8c96bdf59d9b3d1", features = ["fsp_http", "clients-kube"] }
-fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http", "clients-kube"] }
+fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "cfc58492fd521fad7ed9ec48bf5a5f085a8c8c5b", features = ["fsp_http", "clients-kube"] }
+# fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http", "clients-kube"] }
 thiserror = "1.0"
 httparse = "1.4"
 serde = "1.0"
