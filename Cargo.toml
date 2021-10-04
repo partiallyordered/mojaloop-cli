@@ -18,8 +18,8 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-# mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "d25034a6ac8be1faab78504e57f4220b9dc40a12", features = ["hyper", "clients-kube"] }
-mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper", "clients-kube"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "d1a2d471ef1e25ed176b2be11a8fe631e683289a", features = ["hyper", "clients-kube"] }
+# mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper", "clients-kube"] }
 fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "cfc58492fd521fad7ed9ec48bf5a5f085a8c8c5b", features = ["fsp_http", "clients-kube"] }
 # fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http", "clients-kube"] }
 thiserror = "1.0"
@@ -36,5 +36,4 @@ strum = "0.21"
 strum_macros = "0.21"
 # voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "321a8986e97cf132aefc80b3646fe7203b5d71b2" }
 voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
-tokio-tungstenite = "0.14"
 rust_decimal = "1"
