@@ -763,7 +763,7 @@ async fn main() -> anyhow::Result<()> {
                 // TODO: strip trailing slash
                 hostname: url.clone(),
             };
-            let result = client.send(request).await?;
+            client.send(request).await?;
             // TODO: url.clone() is just the hostname the user provided, not the actual endpoint
             // template. This could be confusing. We should show the whole endpoint template.
             println!("Updated {:?} endpoint to {}", callback_type, url.clone());
