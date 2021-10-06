@@ -745,10 +745,24 @@ async fn main() -> anyhow::Result<()> {
     use mojaloop_api::clients::FspiopClient;
     let opts: Opts = Opts::parse();
 
-    let pods = fspiox_api::clients::k8s::get_pods(
-        &opts.kubeconfig,
-        &opts.namespace,
-    ).await?;
+    let client = match opts.kubeconfig {
+        Some(path) => {
+            let custom_config = kube::config::Kubeconfig::read_from(path.as_path())
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+            // TODO: expose some of this to the user?
+            let options = kube::config::KubeConfigOptions {
+                context: None,
+                cluster: None,
+                user: None,
+            };
+            let config = kube::Config::from_custom_kubeconfig(custom_config, &options).await
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?;
+            Client::try_from(config)
+                .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?
+        },
+        None => Client::try_default().await
+            .map_err(|e| MojaloopCliError::UnableToLoadKubeconfig(e.to_string()))?
+    };
 
     async fn set_participant_endpoints(
         participant_name: &FspId,
@@ -791,9 +805,8 @@ async fn main() -> anyhow::Result<()> {
             // we could "get" all clients at once, and lazily connect to them. This would make
             // getting clients much more elegant.
             let mut ml_settlement = mojaloop_api::clients::settlement::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match settlement_args.subcmd {
                 SettlementSubCommand::Window(window_args) => {
@@ -868,9 +881,8 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Quote(quote_args) => {
             let mut ml_quote = mojaloop_api::clients::quote::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match quote_args.subcmd {
                 QuoteSubCommand::Create(quote_create_args) => {
@@ -896,9 +908,8 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Transfer(transfer_args) => {
             let mut ml_transfer = mojaloop_api::clients::transfer::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match transfer_args.subcmd {
                 TransferSubCommand::Prepare(transfer_prepare_args) => {
@@ -952,9 +963,8 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Hub(hub_args) => {
             let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match hub_args.subcmd {
                 HubSubCommand::SettlementModel(hub_settlement_model_args) => {
@@ -1058,9 +1068,8 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Participants(ps_args) => {
             let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match ps_args.subcmd {
                 ParticipantsSubCommand::List => {
@@ -1098,9 +1107,8 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Participant(p_args) => {
             let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
-                &opts.kubeconfig,
+                Some(client),
                 &opts.namespace,
-                Some(pods),
             ).await?;
             match &p_args.subcmd {
                 ParticipantSubCommand::Limits(participant_limits_args) => {
@@ -1387,15 +1395,15 @@ async fn main() -> anyhow::Result<()> {
 
             match voodoo_args.subcmd.clone() {
                 VoodooSubCommand::Destroy => {
-                    voodoo_doll::destroy(Some(pods.clone())).await?;
+                    voodoo_doll::destroy(Some(client.clone()), &opts.namespace).await?;
                 }
 
                 VoodooSubCommand::Deploy => {
-                    voodoo_doll::create(Some(pods.clone())).await?;
+                    voodoo_doll::create(Some(client.clone()), &opts.namespace).await?;
                 }
 
                 VoodooSubCommand::Transfer(voodoo_transfer_args) => {
-                    let (mut voodoo_write, mut voodoo_read) = voodoo_doll::get_pod_stream(pods.clone()).await?.split();
+                    let (mut voodoo_write, mut voodoo_read) = voodoo_doll::get_pod_stream(Some(client.clone())).await?.split();
                     let transfer_id = voodoo_transfer_args.transfer_id.unwrap_or(
                         transfer::TransferId(fspiox_api::CorrelationId::new()));
                     let mut transfers = Vec::new();
@@ -1455,7 +1463,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if destroy {
-                voodoo_doll::destroy(Some(pods)).await?;
+                voodoo_doll::destroy(Some(client), &opts.namespace).await?;
             }
 
             // TODO: check for an existing voodoo doll in the cluster

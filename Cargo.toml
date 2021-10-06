@@ -18,22 +18,22 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "d1a2d471ef1e25ed176b2be11a8fe631e683289a", features = ["hyper", "clients-kube"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "466a22d9d770d9b2a067378b121035ba4d54875b", features = ["hyper", "clients-kube"] }
 # mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper", "clients-kube"] }
-fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "cfc58492fd521fad7ed9ec48bf5a5f085a8c8c5b", features = ["fsp_http", "clients-kube"] }
-# fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/" ,features = ["fsp_http", "clients-kube"] }
+fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "f5a8c4e7868064e74ff097cb0f2928185a27325e", features = ["fsp_http", "clients-kube"] }
+# fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/", features = ["fsp_http", "clients-kube"] }
 thiserror = "1.0"
 httparse = "1.4"
 serde = "1.0"
 serde_json = "1.0"
 # Note: we can't use rustls because of this issue: https://github.com/clux/kube-rs/issues/153
-kube = { git = "https://github.com/kazk/kube-rs", rev = "e1b02c57d9ebd5bbf0d93b244a7be4b7438d3b66", features = ["ws"] }
-kube-runtime = { version = "0.56.0" }
-k8s-openapi = { version = "0.11.0", default-features = false, features = ["v1_20"] }
+kube = { git = "https://github.com/partiallyordered/kube-rs", rev = "46a777178779e6b0895f53ca8202eb7325315230", features = ["ws"] }
+kube-runtime = { version = "0.60.0" }
+k8s-openapi = { version = "0.13.0", default-features = false, features = ["v1_21"] }
 openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
 strum_macros = "0.21"
-# voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "321a8986e97cf132aefc80b3646fe7203b5d71b2" }
-voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
+voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "aada88baae3fa9b550ef23648810bb90e0cc58fa" }
+# voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
 rust_decimal = "1"
