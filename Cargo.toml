@@ -1,6 +1,6 @@
 [package]
 name = "mojaloop-cli"
-version = "0.11.1"
+version = "0.11.2"
 authors = ["msk- <mattkingston@gmail.com>"]
 edition = "2018"
 
