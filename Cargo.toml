@@ -1,6 +1,6 @@
 [package]
 name = "mojaloop-cli"
-version = "0.11.2"
+version = "0.11.3"
 authors = ["msk- <mattkingston@gmail.com>"]
 edition = "2018"
 
@@ -18,9 +18,9 @@ tokio = { version = "1.6.1", features = ["full"] }
 tokio-util = "0.6"
 futures = "0.3.15"
 futures-util = "0.3.15"
-mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "466a22d9d770d9b2a067378b121035ba4d54875b", features = ["hyper", "clients-kube"] }
+mojaloop-api = { git = "https://github.com/partiallyordered/mojaloop-api", rev = "ee7560c5592e5c3991a13f69e07b451b2794bba6", features = ["hyper", "clients-kube"] }
 # mojaloop-api = { path = "/home/msk/projects/github.com/msk-/mojaloop-api/", features = ["hyper", "clients-kube"] }
-fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "f5a8c4e7868064e74ff097cb0f2928185a27325e", features = ["fsp_http", "clients-kube"] }
+fspiox-api = { git = "https://github.com/partiallyordered/fspiox-api", rev = "b2f7cdb2a2b0d914b8eb1fbc0ff885874bc09304", features = ["fsp_http", "clients-kube"] }
 # fspiox-api = { path = "/home/msk/projects/github.com/msk-/fspiox-api/", features = ["fsp_http", "clients-kube"] }
 thiserror = "1.0"
 httparse = "1.4"
@@ -34,6 +34,6 @@ openssl = { version = "0.10", features = ["vendored"] }
 url = "2"
 strum = "0.21"
 strum_macros = "0.21"
-voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "aada88baae3fa9b550ef23648810bb90e0cc58fa" }
+voodoo-doll = { git = "https://github.com/partiallyordered/voodoo-doll", rev = "v0.10.2" }
 # voodoo-doll = { path = "/home/msk/projects/github.com/msk-/voodoo-doll/" }
 rust_decimal = "1"
