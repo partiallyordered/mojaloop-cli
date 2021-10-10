@@ -130,6 +130,11 @@ In sum, in the author's opinion, Rust and its ecosystem hits the sweet spot betw
 maintainability, development velocity, and tooling.
 
 ### TODO
+- A command for quick setup with a range of currencies and participants. I.e. to setup MMK, SEK,
+    XOF with two fsps named payer and payee:
+    ```
+    ml quick-start -c MMK -c SEK -c XOF -p payer -p payee
+    ```
 - rename: mojo?
 - automatic pagination of long results
 - A mode that displays all HTTP requests that are exchanged with the switch (and whatever else) as
