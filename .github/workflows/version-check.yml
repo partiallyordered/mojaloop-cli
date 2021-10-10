@@ -12,16 +12,19 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v2
+      with:
+        path: branch
     - name: Get yj
       run: curl -L https://github.com/sclevine/yj/releases/download/v5.0.0/yj-linux > yj && chmod +x yj
     - name: Get branch Cargo version
-      run: ./yj -tj < Cargo.toml | jq '.package.version' -r > versions
+      run: ./yj -tj < branch/Cargo.toml | jq '.package.version' -r > versions
     - name: Checkout
       uses: actions/checkout@v2
       with:
         ref: main
+        path: main
     - name: Get main branch Cargo version
-      run: git show main:Cargo.toml | ./yj -tj | jq '.package.version' -r >> versions
+      run: ./yj -tj < main/Cargo.toml | jq '.package.version' -r >> versions
     - name: Print versions
       run: cat versions
     - name: Assert there are two unique versions
