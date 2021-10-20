@@ -102,7 +102,7 @@ struct Opts {
 #[derive(Clap)]
 enum SubCommand {
     /// Create, read, update, and upsert a single switch participant
-    #[clap(alias = "p")]
+    #[clap(alias = "p", alias = "fsp")]
     Participant(Participant),
     /// Create, read, enable, and disable accounts
     #[clap(alias = "acc")]
@@ -915,20 +915,17 @@ async fn main() -> anyhow::Result<()> {
                 TransferSubCommand::Prepare(transfer_prepare_args) => {
                     match transfer_prepare_args.subcmd {
                         TransferPrepareSubCommand::New(transfer_prepare_new_args) => {
+                            let transfer_id = transfer::TransferId(CorrelationId::new());
+
                             let transfer_prepare = transfer::TransferPrepareRequest::new(
                                 transfer_prepare_new_args.from,
                                 transfer_prepare_new_args.to,
                                 transfer_prepare_new_args.amount,
                                 transfer_prepare_new_args.currency,
-                                None,
+                                Some(transfer_id),
                             );
 
-                            // TODO: what is this weird pattern? Is it necessary?
-                            let transfer_id = if let FspiopRequestBody::TransferPrepare(body) = &transfer_prepare.0.body {
-                                body.transfer_id
-                            } else {
-                                panic!();
-                            };
+                            println!("Sending {:?}", transfer_prepare);
 
                             ml_transfer.send(transfer_prepare).await?;
 
@@ -1107,7 +1104,7 @@ async fn main() -> anyhow::Result<()> {
 
         SubCommand::Participant(p_args) => {
             let mut ml_central_ledger = mojaloop_api::clients::central_ledger::Client::from_k8s_params(
-                Some(client),
+                Some(client.clone()),
                 &opts.namespace,
             ).await?;
             match &p_args.subcmd {
@@ -1265,11 +1262,12 @@ async fn main() -> anyhow::Result<()> {
                                     } else {
                                         participants::ParticipantFundsInOutAction::RecordFundsOutPrepareReserve
                                     };
+                                    let transfer_id = fspiox_api::CorrelationId::new();
                                     let funds_request = participants::PostParticipantSettlementFunds {
                                         name: p_args.name,
                                         account_id: account.id,
                                         funds: participants::ParticipantFundsInOut {
-                                            transfer_id: fspiox_api::CorrelationId::new(),
+                                            transfer_id: transfer_id.clone(),
                                             action,
                                             amount: fspiox_api::Money {
                                                 currency: part_acc_fund_args.currency,
@@ -1280,6 +1278,11 @@ async fn main() -> anyhow::Result<()> {
                                         }
                                     };
                                     ml_central_ledger.send(funds_request).await?;
+                                    println!(
+                                        "Sent funds request of {} with transfer ID {}",
+                                        part_acc_fund_num_args.amount,
+                                        transfer_id
+                                    );
                                 }
                             }
                         }
@@ -1382,7 +1385,7 @@ async fn main() -> anyhow::Result<()> {
         },
 
         SubCommand::Voodoo(voodoo_args) => {
-            use voodoo_doll::protocol::*;
+            use voodoo_doll::protocol as vproto;
             use futures_util::StreamExt;
             use futures::SinkExt;
             use voodoo_doll::Message;
@@ -1408,7 +1411,7 @@ async fn main() -> anyhow::Result<()> {
                         transfer::TransferId(fspiox_api::CorrelationId::new()));
                     let mut transfers = Vec::new();
                     transfers.push(
-                        TransferMessage {
+                        vproto::TransferMessage {
                             msg_sender: voodoo_transfer_args.payer,
                             msg_recipient: voodoo_transfer_args.payee,
                             currency: voodoo_transfer_args.currency,
@@ -1419,9 +1422,12 @@ async fn main() -> anyhow::Result<()> {
                     voodoo_write.send(
                         Message::Text(
                             serde_json::to_string(
-                                &ClientMessage::Transfers(
-                                    transfers
-                                )
+                                &vproto::ClientMessage {
+                                    id: CorrelationId::new(),
+                                    content: vproto::Request::Transfers(
+                                        transfers
+                                    ),
+                                }
                             )?
                         )
                     ).await?;
@@ -1430,16 +1436,17 @@ async fn main() -> anyhow::Result<()> {
                         let msg = msg?;
                         match msg {
                             Message::Text(s) => {
-                                let response_msg: ServerMessage =
+                                let response_msg: vproto::ServerMessage =
                                     serde_json::from_str(&s)?;
-                                match response_msg {
-                                    ServerMessage::TransferComplete(tc) => {
+                                // TODO: we should be checking the ID of the notification
+                                match response_msg.content {
+                                    vproto::Notification::TransferComplete(tc) => {
                                         if tc.id == transfer_id {
                                             println!("Transfer complete. ID: {}", transfer_id);
                                             break;
                                         }
                                     }
-                                    ServerMessage::TransferError(te) => {
+                                    vproto::Notification::TransferError(te) => {
                                         if te.id == transfer_id {
                                             println!("Transfer error. Error: {:?}", s);
                                             break;

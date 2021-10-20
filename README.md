@@ -16,6 +16,9 @@ $ mojaloop-cli hub accounts create all SEK
 Created hub reconciliation account: SEK
 Created hub settlement account: SEK
 
+$ mojaloop-cli hub settlement-model create MMK
+Created settlement model: DEFERREDNET
+
 $ mojaloop-cli participant testfspsek onboard SEK http://testfspsek.io/fspiopapi 10000
 Post participants result:
 Participant { name: "testfspsek", id: "http://central-ledger/participants/testfspsek", created: 2021-06-28T22:35:36Z, is_active: 1, accounts: [ParticipantAccount { id: SettlementAccountId(23), ledger_account_type: Position, currency: sek, is_active: 0 }, ParticipantAccount { id: SettlementAccountId(24), ledger_account_type: Settlement, currency: sek, is_active: 0 }] }
@@ -130,11 +133,18 @@ In sum, in the author's opinion, Rust and its ecosystem hits the sweet spot betw
 maintainability, development velocity, and tooling.
 
 ### TODO
+- Easy access to voodoo-doll logs. `mojaloop-cli voodoo logs`. Similarly other services!
+- --curl to print requests as curl, as they are made.
+- Increase discoverability; for example `mojaloop-cli participant --help` doesn't tell us that we
+    can process funds-in. How can we improve this? A command that prints the full tree of
+    subcommands perhaps?
+- Dry run?
 - A command for quick setup with a range of currencies and participants. I.e. to setup MMK, SEK,
     XOF with two fsps named payer and payee:
     ```
     ml quick-start -c MMK -c SEK -c XOF -p payer -p payee
     ```
+    Note: set up settlement model
 - rename: mojo?
 - automatic pagination of long results
 - A mode that displays all HTTP requests that are exchanged with the switch (and whatever else) as
