@@ -2,8 +2,9 @@ name: Enforce version change
 
 on:
   push:
-    branches:
-    - '**'
+    # will run on every branch except main
+    branches-ignore:
+    - 'main'
 
 jobs:
   version-change-test:
